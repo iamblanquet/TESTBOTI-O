@@ -268,12 +268,13 @@ app.post('/api/bot/config', async (req, res) => {
         message: `Bot de Telegram conectado exitosamente como @${me.username}`,
         botInfo: me
       });
-    } else {
-      return res.status(400).json({
-        success: false,
-        error: 'El token ingresado no es válido o no pudo conectarse con la API de Telegram.'
-      });
     }
+  } catch (error) {
+    console.error('Error configurando bot:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // 8. Servir archivos estáticos del frontend (Producción / Render)
 const fs = require('fs');
 const frontendDist = path.join(__dirname, '../frontend/dist');
