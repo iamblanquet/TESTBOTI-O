@@ -13,11 +13,15 @@ import {
   Sliders,
   CheckCircle2,
   AlertCircle,
-  Compass
+  Compass,
+  Tractor,
+  Database
 } from 'lucide-react';
 import OperatorView from './components/OperatorView';
 import SupervisorView from './components/SupervisorView';
 import LeaderView from './components/LeaderView';
+import MaquinariaActivosView from './components/MaquinariaActivosView';
+import CatalogosDbView from './components/CatalogosDbView';
 import OfflineQueueModal from './components/OfflineQueueModal';
 import TelegramConfigModal from './components/TelegramConfigModal';
 
@@ -42,13 +46,13 @@ import {
 } from './services/api';
 
 export default function App() {
-  const [activeRole, setActiveRole] = useState('operator'); // 'operator' | 'supervisor' | 'leader'
+  const [activeTab, setActiveTab] = useState('campo'); // 'campo' | 'tablero' | 'maquinaria' | 'catalogos' | 'direccion'
 
-  // Telegram WebApp Context
+  // Contexto Telegram WebApp
   const [tgUser, setTgUser] = useState(null);
   const [isInsideTelegram, setIsInsideTelegram] = useState(false);
 
-  // Red & Sincronización
+  // Conectividad y Cola Offline
   const [isBrowserOnline, setIsBrowserOnline] = useState(navigator.onLine);
   const [isSimulatedOffline, setIsSimulatedOffline] = useState(getOfflineSimulationMode());
   const isEffectiveOnline = isBrowserOnline && !isSimulatedOffline;
@@ -64,7 +68,7 @@ export default function App() {
   const [isQueueModalOpen, setIsQueueModalOpen] = useState(false);
   const [isBotModalOpen, setIsBotModalOpen] = useState(false);
 
-  // Inicializar Telegram WebApp
+  // 1. Inicialización Telegram Mini App SDK
   useEffect(() => {
     if (window.Telegram && window.Telegram.WebApp) {
       const wa = window.Telegram.WebApp;
@@ -81,7 +85,7 @@ export default function App() {
     }
   }, []);
 
-  // Cargar datos
+  // 2. Cargar datos del servidor / local
   const refreshData = useCallback(async () => {
     const localQueue = getOfflineReportsQueue();
     setQueue(localQueue);
@@ -99,7 +103,7 @@ export default function App() {
           setTableroData(tabRes);
         }
       } catch (e) {
-        console.warn('Usando catálogo local:', e);
+        console.warn('Usando catálogo local offline:', e);
         setObras(getLocalObras());
         setPredios(getLocalPredios());
       }
@@ -116,7 +120,6 @@ export default function App() {
     } catch (e) {}
   }, []);
 
-  // Escuchar estado de red
   useEffect(() => {
     const handleOnline = () => setIsBrowserOnline(true);
     const handleOffline = () => setIsBrowserOnline(false);
@@ -134,7 +137,7 @@ export default function App() {
     loadBotStatus();
   }, [refreshData, loadBotStatus]);
 
-  // Sincronización automática de reportes offline
+  // 3. Auto-sincronización Offline-First
   const triggerSync = useCallback(async () => {
     if (!isEffectiveOnline || isSyncing) return;
 
@@ -155,7 +158,7 @@ export default function App() {
         setSyncToast({
           type: 'success',
           title: '¡Sincronización AGROK Exitosa!',
-          msg: `${res.synced_count} reporte(s) enviados a la base central y notificados al Bot.`
+          msg: `${res.synced_count} reporte(s) guardados en la base de datos central.`
         });
 
         refreshData();
@@ -172,7 +175,7 @@ export default function App() {
       });
     } finally {
       setIsSyncing(false);
-      setTimeout(() => setSyncToast(null), 6000);
+      setTimeout(() => setSyncToast(null), 5000);
     }
   }, [isEffectiveOnline, isSyncing, refreshData]);
 
@@ -203,7 +206,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col antialiased">
-      {/* Header */}
+      {/* Top Header */}
       <header className="bg-slate-900 text-white shadow-md sticky top-0 z-40">
         <div className="max-w-4xl mx-auto px-4 py-2.5 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
@@ -213,47 +216,46 @@ export default function App() {
             <div>
               <div className="flex items-center gap-1.5">
                 <h1 className="font-extrabold text-sm leading-tight tracking-tight">
-                  AGROK · Sistema de Campo
+                  AGROK · Mini App
                 </h1>
-                <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                  SPEC V2
+                <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                  OFFLINE-FIRST
                 </span>
               </div>
               <p className="text-[10px] text-slate-400">
-                {tgUser ? `Telegram: @${tgUser.username || tgUser.first_name}` : 'Offline-First + Telegram Bot'}
+                {tgUser ? `Usuario: @${tgUser.username || tgUser.first_name}` : 'Sistema de Campo AGROK'}
               </p>
             </div>
           </div>
 
-          <button
-            onClick={() => setIsBotModalOpen(true)}
-            className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-semibold flex items-center gap-1 transition ${
-              botStatus?.hasActiveBot
-                ? 'bg-emerald-950/80 border-emerald-500 text-emerald-300 hover:bg-emerald-900'
-                : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'
-            }`}
-            title="Configuración de Telegram"
-          >
-            <Bot className="w-3.5 h-3.5 text-emerald-400" />
-            <span>
-              {botStatus?.hasActiveBot ? `@${botStatus?.botInfo?.username || 'Bot'}` : 'Bot'}
-            </span>
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setIsBotModalOpen(true)}
+              className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-semibold flex items-center gap-1 transition ${
+                botStatus?.hasActiveBot
+                  ? 'bg-emerald-950/80 border-emerald-500 text-emerald-300'
+                  : 'bg-slate-800 border-slate-700 text-slate-300'
+              }`}
+            >
+              <Bot className="w-3.5 h-3.5 text-emerald-400" />
+              <span>{botStatus?.hasActiveBot ? `@${botStatus?.botInfo?.username || 'Bot'}` : 'Bot'}</span>
+            </button>
+          </div>
         </div>
 
-        {/* Roles Tab Bar */}
-        <div className="bg-slate-950/80 border-t border-slate-800">
-          <div className="max-w-4xl mx-auto px-2 flex">
+        {/* Mini App Bottom/Top Navigation Tabs */}
+        <div className="bg-slate-950/90 border-t border-slate-800 overflow-x-auto no-scrollbar">
+          <div className="max-w-4xl mx-auto px-2 flex min-w-max">
             <button
-              onClick={() => setActiveRole('operator')}
-              className={`flex-1 py-2 px-2 font-bold text-xs flex items-center justify-center gap-1.5 border-b-2 transition ${
-                activeRole === 'operator'
+              onClick={() => setActiveTab('campo')}
+              className={`py-2 px-3 font-bold text-xs flex items-center gap-1.5 border-b-2 transition ${
+                activeTab === 'campo'
                   ? 'border-emerald-500 text-emerald-400 bg-slate-900/50'
                   : 'border-transparent text-slate-400 hover:text-slate-200'
               }`}
             >
               <Smartphone className="w-3.5 h-3.5" />
-              <span>1. Cuadrilla / Campo</span>
+              <span>Reporte Campo</span>
               {pendingCount > 0 && (
                 <span className="bg-amber-500 text-slate-950 text-[10px] font-black px-1.5 rounded-full">
                   {pendingCount}
@@ -262,27 +264,51 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => setActiveRole('supervisor')}
-              className={`flex-1 py-2 px-2 font-bold text-xs flex items-center justify-center gap-1.5 border-b-2 transition ${
-                activeRole === 'supervisor'
+              onClick={() => setActiveTab('tablero')}
+              className={`py-2 px-3 font-bold text-xs flex items-center gap-1.5 border-b-2 transition ${
+                activeTab === 'tablero'
                   ? 'border-teal-500 text-teal-400 bg-slate-900/50'
                   : 'border-transparent text-slate-400 hover:text-slate-200'
               }`}
             >
               <Shield className="w-3.5 h-3.5" />
-              <span>2. Tablero Operativo</span>
+              <span>Tablero Operativo</span>
             </button>
 
             <button
-              onClick={() => setActiveRole('leader')}
-              className={`flex-1 py-2 px-2 font-bold text-xs flex items-center justify-center gap-1.5 border-b-2 transition ${
-                activeRole === 'leader'
+              onClick={() => setActiveTab('maquinaria')}
+              className={`py-2 px-3 font-bold text-xs flex items-center gap-1.5 border-b-2 transition ${
+                activeTab === 'maquinaria'
+                  ? 'border-amber-500 text-amber-400 bg-slate-900/50'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Tractor className="w-3.5 h-3.5" />
+              <span>Maquinaria & Activos</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('catalogos')}
+              className={`py-2 px-3 font-bold text-xs flex items-center gap-1.5 border-b-2 transition ${
+                activeTab === 'catalogos'
+                  ? 'border-sky-500 text-sky-400 bg-slate-900/50'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Database className="w-3.5 h-3.5" />
+              <span>Base de Datos</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('direccion')}
+              className={`py-2 px-3 font-bold text-xs flex items-center gap-1.5 border-b-2 transition ${
+                activeTab === 'direccion'
                   ? 'border-purple-500 text-purple-400 bg-slate-900/50'
                   : 'border-transparent text-slate-400 hover:text-slate-200'
               }`}
             >
               <BarChart2 className="w-3.5 h-3.5" />
-              <span>3. Dirección</span>
+              <span>Dirección</span>
             </button>
           </div>
         </div>
@@ -307,9 +333,9 @@ export default function App() {
         </div>
       )}
 
-      {/* Main Content */}
+      {/* Main Content Area */}
       <main className="max-w-4xl mx-auto px-3 py-4 flex-1 w-full">
-        {activeRole === 'operator' && (
+        {activeTab === 'campo' && (
           <OperatorView
             obras={obras}
             predios={predios}
@@ -325,7 +351,7 @@ export default function App() {
           />
         )}
 
-        {activeRole === 'supervisor' && (
+        {activeTab === 'tablero' && (
           <SupervisorView
             tableroData={tableroData}
             onRefreshData={refreshData}
@@ -334,7 +360,23 @@ export default function App() {
           />
         )}
 
-        {activeRole === 'leader' && (
+        {activeTab === 'maquinaria' && (
+          <MaquinariaActivosView
+            maquinaria={tableroData?.maquinaria || []}
+            activos={tableroData?.activos || []}
+            onRefreshData={refreshData}
+          />
+        )}
+
+        {activeTab === 'catalogos' && (
+          <CatalogosDbView
+            obras={obras}
+            predios={predios}
+            onRefreshData={refreshData}
+          />
+        )}
+
+        {activeTab === 'direccion' && (
           <LeaderView
             tableroData={tableroData}
             botStatus={botStatus}

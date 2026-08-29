@@ -13,7 +13,20 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
-// 1. Tablero Hoy (Alimenta los 4 widgets canónicos según docs/3 — Backend y escritorio.md §5)
+// 0. Telegram Webhook Endpoint (Para Render, elimina 409 Conflict)
+app.post('/api/telegram/webhook', (req, res) => {
+  const botInstance = getBotInstance();
+  if (botInstance) {
+    try {
+      botInstance.processUpdate(req.body);
+    } catch (err) {
+      console.error('Error procesando update de webhook:', err);
+    }
+  }
+  res.sendStatus(200);
+});
+
+// 1. Tablero Hoy (Alimenta los 4 widgets canónicos según docs/3)
 app.get('/api/tablero/hoy', async (req, res) => {
   try {
     const today = new Date().toISOString().split('T')[0];
@@ -26,7 +39,6 @@ app.get('/api/tablero/hoy', async (req, res) => {
     const sinReporte = [];
     for (const o of obrasOperacion) {
       if (!reportedIds.has(o.id)) {
-        // Calcular días desde último reporte
         const ultRep = await get('SELECT fecha_operativa FROM reporte WHERE obra_id = ? ORDER BY fecha_operativa DESC LIMIT 1', [o.id]);
         let dias = 1;
         if (ultRep && ultRep.fecha_operativa) {
@@ -37,7 +49,7 @@ app.get('/api/tablero/hoy', async (req, res) => {
     }
     sinReporte.sort((a, b) => b.dias_sin_reporte - a.dias_sin_reporte);
 
-    // Widget 2: Avance contra meta (por obra y predio)
+    // Widget 2: Avance contra meta
     const obrasAvance = [];
     for (const o of obrasOperacion) {
       const predios = await all(`
@@ -93,10 +105,10 @@ app.get('/api/tablero/hoy', async (req, res) => {
       WHERE i.estado != 'cerrada' 
       ORDER BY i.abierta_en ASC
     `);
-    const incidenciasConDias = incidencias.map(i => {
-      const dias = Math.max(0, Math.floor((new Date() - new Date(i.abierta_en)) / (1000 * 60 * 60 * 24)));
-      return { ...i, dias_abierta: dias };
-    });
+    const incidenciasConDias = incidencias.map(i => ({
+      ...i,
+      dias_abierta: Math.max(0, Math.floor((new Date() - new Date(i.abierta_en)) / (1000 * 60 * 60 * 24)))
+    }));
 
     // Widget 4: Bloqueado por material
     const materialesFaltantes = await all(`
@@ -106,7 +118,6 @@ app.get('/api/tablero/hoy', async (req, res) => {
       WHERE (m.requerido - m.en_sitio) > 0
     `);
 
-    // Extras: Maquinaria y Activos
     const maquinas = await all('SELECT * FROM maquina');
     const activos = await all('SELECT a.*, p.nombre as predio_nombre FROM activo a JOIN predio p ON a.predio_id = p.id');
 
@@ -128,7 +139,7 @@ app.get('/api/tablero/hoy', async (req, res) => {
   }
 });
 
-// 2. Catálogo de Obras y Predios (Para descarga offline en la Mini App)
+// 2. Obras y Predios
 app.get('/api/obras', async (req, res) => {
   try {
     const obras = await all('SELECT * FROM obra ORDER BY id ASC');
@@ -154,7 +165,39 @@ app.get('/api/obras', async (req, res) => {
   }
 });
 
-// 3. Sincronización en lote de Reportes Offline (Offline-First Sync API)
+app.post('/api/obras', async (req, res) => {
+  const { id, nombre, proyecto_id, fase_actual, estado, responsable_id, predio_ids } = req.body;
+  if (!id || !nombre) return res.status(400).json({ success: false, error: 'ID y Nombre requeridos' });
+
+  try {
+    await run(`
+      INSERT INTO obra (id, nombre, proyecto_id, entidad_id, fase_actual, estado, responsable_id)
+      VALUES (?, ?, ?, 'Agrokool', ?, ?, ?)
+    `, [id.trim().toLowerCase(), nombre.trim(), proyecto_id || 'PRJ-MAIZ-2026', fase_actual || 'operacion', estado || 'operacion', responsable_id || 'Campo']);
+
+    if (predio_ids && Array.isArray(predio_ids)) {
+      for (const pid of predio_ids) {
+        await run('INSERT INTO obra_predio (obra_id, predio_id) VALUES (?, ?)', [id.trim().toLowerCase(), pid]);
+      }
+    }
+
+    res.json({ success: true, message: 'Obra creada con éxito' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 3. Predios
+app.get('/api/predios', async (req, res) => {
+  try {
+    const predios = await all('SELECT * FROM predio ORDER BY nombre ASC');
+    res.json({ success: true, predios });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 4. Sincronización en lote de Reportes Offline (Offline-First)
 app.post('/api/reports/sync', async (req, res) => {
   const { reports } = req.body;
   if (!reports || !Array.isArray(reports) || reports.length === 0) {
@@ -205,7 +248,6 @@ app.post('/api/reports/sync', async (req, res) => {
         ]);
         reporteId = insertRes.id;
 
-        // Insertar cuadrilla
         if (cuadrilla && Array.isArray(cuadrilla)) {
           for (const c of cuadrilla) {
             await run(`
@@ -215,7 +257,6 @@ app.post('/api/reports/sync', async (req, res) => {
           }
         }
 
-        // Insertar líneas de avance
         if (avances && Array.isArray(avances)) {
           for (const a of avances) {
             await run(`
@@ -255,7 +296,44 @@ app.post('/api/reports/sync', async (req, res) => {
   });
 });
 
-// 4. Crear Incidencia
+// 5. Historial de Reportes
+app.get('/api/reportes', async (req, res) => {
+  try {
+    const reportes = await all(`
+      SELECT r.*, o.nombre as obra_nombre 
+      FROM reporte r 
+      JOIN obra o ON r.obra_id = o.id 
+      ORDER BY r.id DESC LIMIT 50
+    `);
+
+    const result = [];
+    for (const r of reportes) {
+      const cuadrilla = await all('SELECT * FROM reporte_cuadrilla WHERE reporte_id = ?', [r.id]);
+      const lineas = await all('SELECT l.*, p.nombre as predio_nombre FROM reporte_linea l JOIN predio p ON l.predio_id = p.id WHERE l.reporte_id = ?', [r.id]);
+      result.push({ ...r, cuadrilla, lineas });
+    }
+
+    res.json({ success: true, reportes: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 6. Incidencias
+app.get('/api/incidencias', async (req, res) => {
+  try {
+    const incidencias = await all(`
+      SELECT i.*, o.nombre as obra_nombre 
+      FROM incidencia i 
+      JOIN obra o ON i.obra_id = o.id 
+      ORDER BY i.abierta_en DESC
+    `);
+    res.json({ success: true, incidencias });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 app.post('/api/incidencias', async (req, res) => {
   const { tipo, obra_id, maquina_id, descripcion, autor_nombre } = req.body;
   if (!tipo || !obra_id || !descripcion) {
@@ -283,7 +361,6 @@ app.post('/api/incidencias', async (req, res) => {
   }
 });
 
-// 5. Cerrar o Actualizar Incidencia (Requiere Causa Raíz)
 app.post('/api/incidencias/:folio/estado', async (req, res) => {
   const { folio } = req.params;
   const { estado, causa_raiz, autor_nombre } = req.body;
@@ -298,17 +375,14 @@ app.post('/api/incidencias/:folio/estado', async (req, res) => {
   try {
     const nowIso = new Date().toISOString();
     if (estado === 'cerrada') {
-      await run(`
-        UPDATE incidencia SET estado = 'cerrada', cerrada_en = ?, causa_raiz = ? WHERE folio = ?
-      `, [nowIso, causa_raiz.trim(), folio]);
+      await run("UPDATE incidencia SET estado = 'cerrada', cerrada_en = ?, causa_raiz = ? WHERE folio = ?", [nowIso, causa_raiz.trim(), folio]);
     } else {
       await run('UPDATE incidencia SET estado = ? WHERE folio = ?', [estado, folio]);
     }
 
-    await run(`
-      INSERT INTO incidencia_evento (folio, fecha, autor_nombre, texto, estado_resultante)
-      VALUES (?, ?, ?, ?, ?)
-    `, [folio, nowIso, autor_nombre || 'Usuario', `Cambio de estado a ${estado}: ${causa_raiz || ''}`, estado]);
+    await run("INSERT INTO incidencia_evento (folio, fecha, autor_nombre, texto, estado_resultante) VALUES (?, ?, ?, ?, ?)", [
+      folio, nowIso, autor_nombre || 'Usuario', `Cambio a ${estado}: ${causa_raiz || ''}`, estado
+    ]);
 
     res.json({ success: true, message: `Incidencia ${folio} actualizada a ${estado}` });
   } catch (error) {
@@ -316,40 +390,134 @@ app.post('/api/incidencias/:folio/estado', async (req, res) => {
   }
 });
 
-// 6. Registrar Lectura de Horómetro de Maquinaria
-app.post('/api/lecturas/maquina', async (req, res) => {
-  const { maquina_id, obra_id, horometro_inicio, horometro_fin, litros, autor_nombre } = req.body;
-  if (!maquina_id || horometro_fin === undefined) {
-    return res.status(400).json({ success: false, error: 'Máquina y horómetro fin son obligatorios' });
-  }
-
+// 7. Maquinaria y Horómetros
+app.get('/api/maquinaria', async (req, res) => {
   try {
-    const hInicio = Number(horometro_inicio) || 0;
-    const hFin = Number(horometro_fin) || 0;
-    const horasTrabajadas = Math.max(0, Math.round((hFin - hInicio) * 10) / 10);
-    const nowIso = new Date().toISOString();
-
-    await run(`
-      INSERT INTO lectura_maquina (maquina_id, obra_id, fecha, autor_nombre, horometro_inicio, horometro_fin, horas_trabajadas, litros)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `, [maquina_id, obra_id || null, nowIso, autor_nombre || 'Operador', hInicio, hFin, horasTrabajadas, Number(litros) || 0]);
-
-    await run('UPDATE maquina SET horometro_actual = ? WHERE id = ?', [hFin, maquina_id]);
-
-    res.json({ success: true, message: 'Lectura de horómetro registrada' });
+    const maquinas = await all('SELECT * FROM maquina ORDER BY id ASC');
+    const lecturas = await all('SELECT * FROM lectura_maquina ORDER BY id DESC LIMIT 20');
+    res.json({ success: true, maquinas, lecturas });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// 7. Endpoint para probar el Parser de Texto AGROK
+app.post('/api/lecturas/maquina', async (req, res) => {
+  const { maquina_id, obra_id, horometro_inicio, horometro_fin, litros, autor_nombre } = req.body;
+  if (!maquina_id || horometro_fin === undefined) {
+    return res.status(400).json({ success: false, error: 'Máquina y horómetro fin requeridos' });
+  }
+
+  try {
+    const hInicio = Number(horometro_inicio) || 0;
+    const hFin = Number(horometro_fin) || 0;
+    const horas = Math.max(0, Math.round((hFin - hInicio) * 10) / 10);
+    const nowIso = new Date().toISOString();
+
+    await run(`
+      INSERT INTO lectura_maquina (maquina_id, obra_id, fecha, autor_nombre, horometro_inicio, horometro_fin, horas_trabajadas, litros)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `, [maquina_id, obra_id || null, nowIso, autor_nombre || 'Operador', hInicio, hFin, horas, Number(litros) || 0]);
+
+    await run('UPDATE maquina SET horometro_actual = ? WHERE id = ?', [hFin, maquina_id]);
+
+    res.json({ success: true, message: 'Horómetro registrado con éxito' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 8. Activos
+app.get('/api/activos', async (req, res) => {
+  try {
+    const activos = await all('SELECT a.*, p.nombre as predio_nombre FROM activo a JOIN predio p ON a.predio_id = p.id');
+    res.json({ success: true, activos });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 9. Materiales
+app.get('/api/materiales', async (req, res) => {
+  try {
+    const materiales = await all(`
+      SELECT m.*, o.nombre as obra_nombre 
+      FROM material m 
+      JOIN obra o ON m.obra_id = o.id 
+      ORDER BY m.id DESC
+    `);
+    res.json({ success: true, materiales });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/materiales', async (req, res) => {
+  const { obra_id, insumo, requerido, en_sitio, pedido, unidad, eta, autor_nombre } = req.body;
+  if (!obra_id || !insumo) return res.status(400).json({ success: false, error: 'Obra e Insumo requeridos' });
+
+  try {
+    await run(`
+      INSERT INTO material (obra_id, insumo, requerido, en_sitio, pedido, unidad, eta, actualizado_en, autor_nombre)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [obra_id, insumo.trim(), Number(requerido) || 0, Number(en_sitio) || 0, Number(pedido) || 0, unidad || 'pieza', eta || 'sin_fecha', new Date().toISOString(), autor_nombre || 'Supervisor']);
+
+    res.json({ success: true, message: 'Material registrado' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 10. Mediciones Oficiales (Dron / Topografía)
+app.get('/api/mediciones', async (req, res) => {
+  try {
+    const mediciones = await all(`
+      SELECT m.*, o.nombre as obra_nombre, p.nombre as predio_nombre 
+      FROM medicion m 
+      JOIN obra o ON m.obra_id = o.id 
+      JOIN predio p ON m.predio_id = p.id 
+      ORDER BY m.id DESC
+    `);
+    res.json({ success: true, mediciones });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/mediciones', async (req, res) => {
+  const { obra_id, predio_id, hectareas, fuente, autor_nombre } = req.body;
+  if (!obra_id || !predio_id || !hectareas) return res.status(400).json({ success: false, error: 'Campos incompletos' });
+
+  try {
+    await run(`
+      INSERT INTO medicion (obra_id, predio_id, fecha, hectareas, fuente, autor_nombre)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `, [obra_id, predio_id, new Date().toISOString().split('T')[0], Number(hectareas), fuente || 'dron', autor_nombre || 'Piloto Dron']);
+
+    res.json({ success: true, message: 'Medición oficial registrada' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 11. Usuarios y Suscriptores Telegram
+app.get('/api/usuarios', async (req, res) => {
+  try {
+    const usuarios = await all('SELECT * FROM usuario');
+    const subscribers = await all('SELECT * FROM telegram_subscribers');
+    res.json({ success: true, usuarios, subscribers });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 12. Parser Helper
 app.post('/api/parser/test', (req, res) => {
   const { text, obra_id } = req.body;
   const parsed = parseDailyReport(text, new Date(), obra_id);
   res.json({ success: true, parsed });
 });
 
-// 8. Estado y Configuración del Bot
+// 13. Bot Status & Config
 app.get('/api/bot/status', async (req, res) => {
   try {
     const status = getBotStatus();
@@ -378,7 +546,7 @@ app.post('/api/bot/config', async (req, res) => {
 
   try {
     await run("INSERT INTO system_settings (key, value) VALUES ('TELEGRAM_BOT_TOKEN', ?) ON CONFLICT(key) DO UPDATE SET value = ?", [token.trim(), token.trim()]);
-    const botInstance = initTelegramBot(token.trim());
+    const botInstance = await initTelegramBot(token.trim(), app);
     if (botInstance) {
       const me = await botInstance.getMe();
       return res.json({ success: true, message: `Conectado como @${me.username}`, botInfo: me });
@@ -389,7 +557,7 @@ app.post('/api/bot/config', async (req, res) => {
   }
 });
 
-// 9. Servir archivos estáticos del frontend (Producción / Render)
+// 14. Servir Frontend Estático en Producción (Render)
 const frontendDist = path.join(__dirname, '../frontend/dist');
 if (fs.existsSync(frontendDist)) {
   console.log('📦 Sirviendo frontend estático desde:', frontendDist);
@@ -400,14 +568,14 @@ if (fs.existsSync(frontendDist)) {
   });
 }
 
-// Inicialización
+// Inicialización del Servidor
 async function startServer() {
   await initDb();
   const savedTokenRow = await get("SELECT value FROM system_settings WHERE key = 'TELEGRAM_BOT_TOKEN'");
   const token = process.env.TELEGRAM_BOT_TOKEN || (savedTokenRow ? savedTokenRow.value : null);
 
   if (token) {
-    initTelegramBot(token);
+    await initTelegramBot(token, app);
   } else {
     console.log('💡 [Telegram Bot AGROK] Ingresa tu token de @BotFather en el panel.');
   }
