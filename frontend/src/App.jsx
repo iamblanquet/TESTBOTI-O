@@ -18,7 +18,7 @@ import {
   Database,
   Users,
   LogOut,
-  UserCheck
+  Settings
 } from 'lucide-react';
 import LoginScreen from './components/LoginScreen';
 import OperatorView from './components/OperatorView';
@@ -26,7 +26,7 @@ import SupervisorView from './components/SupervisorView';
 import LeaderView from './components/LeaderView';
 import MaquinariaActivosView from './components/MaquinariaActivosView';
 import CatalogosDbView from './components/CatalogosDbView';
-import UsuariosAdminView from './components/UsuariosAdminView';
+import AdminWebConsole from './components/AdminWebConsole';
 import OfflineQueueModal from './components/OfflineQueueModal';
 import TelegramConfigModal from './components/TelegramConfigModal';
 
@@ -53,7 +53,6 @@ import {
 const AUTH_STORAGE_KEY = 'agrok_auth_user_session';
 
 export default function App() {
-  // 1. Estado de Sesión y Usuario Autenticado
   const [currentUser, setCurrentUser] = useState(() => {
     try {
       const saved = localStorage.getItem(AUTH_STORAGE_KEY);
@@ -84,7 +83,6 @@ export default function App() {
   const [isQueueModalOpen, setIsQueueModalOpen] = useState(false);
   const [isBotModalOpen, setIsBotModalOpen] = useState(false);
 
-  // Inicialización Telegram WebApp
   useEffect(() => {
     if (window.Telegram && window.Telegram.WebApp) {
       const wa = window.Telegram.WebApp;
@@ -101,7 +99,8 @@ export default function App() {
   // Ajustar tab inicial según rol
   useEffect(() => {
     if (currentUser) {
-      if (currentUser.rol === 'direccion') setActiveTab('direccion');
+      if (currentUser.rol === 'it') setActiveTab('admin_console');
+      else if (currentUser.rol === 'direccion') setActiveTab('direccion');
       else if (currentUser.rol === 'supervisor') setActiveTab('tablero');
       else setActiveTab('campo');
     }
@@ -118,7 +117,6 @@ export default function App() {
     localStorage.removeItem(AUTH_STORAGE_KEY);
   };
 
-  // Cargar datos
   const refreshData = useCallback(async () => {
     const localQueue = getOfflineReportsQueue();
     setQueue(localQueue);
@@ -169,7 +167,6 @@ export default function App() {
     loadBotStatus();
   }, [refreshData, loadBotStatus]);
 
-  // Sincronización automática de reportes offline
   const triggerSync = useCallback(async () => {
     if (!isEffectiveOnline || isSyncing) return;
 
@@ -233,7 +230,7 @@ export default function App() {
     }
   };
 
-  // Si no hay usuario logueado, mostrar pantalla de Login con Roles y Contraseñas
+  // Si no hay usuario logueado -> Login
   if (!currentUser) {
     return <LoginScreen onLoginSuccess={handleLoginSuccess} />;
   }
@@ -241,19 +238,23 @@ export default function App() {
   const userRole = currentUser.rol || 'campo';
   const pendingCount = queue.filter(r => r.status === 'PENDING_SYNC' || r.status === 'ERROR').length;
 
-  // REGLAS ESTRICTAS DE ACCESO A PANTALLAS POR ROL:
+  // REGLAS ESTRICTAS DE ACCESO POR ROL:
+  // 1. Operador: Únicamente Reportes de Campo y Horómetros.
+  // 2. Gerente / Supervisor: Tablero Operativo, Reportes, Maquinaria, Catálogos y Creación de Tareas/Proyectos.
+  // 3. Dirección: Dashboard Ejecutivo, KPIs, Tablero consolidado.
+  // 4. Admin / IT: Consola Web completa, Gestión de Usuarios/Funciones y Base de Datos.
   const canAccessCampo = userRole === 'campo' || userRole === 'supervisor' || userRole === 'it';
   const canAccessTablero = userRole === 'supervisor' || userRole === 'direccion' || userRole === 'it';
   const canAccessMaquinaria = userRole === 'supervisor' || userRole === 'direccion' || userRole === 'it';
   const canAccessCatalogos = userRole === 'supervisor' || userRole === 'direccion' || userRole === 'it';
   const canAccessDireccion = userRole === 'direccion' || userRole === 'it';
-  const canAccessUsuarios = userRole === 'it' || userRole === 'supervisor';
+  const canAccessAdminConsole = userRole === 'it';
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col antialiased select-none font-sans text-slate-900">
       {/* Header Principal */}
       <header className="bg-slate-900 text-white shadow-md sticky top-0 z-40">
-        <div className="max-w-4xl mx-auto px-4 py-2.5 flex items-center justify-between gap-2">
+        <div className="max-w-6xl mx-auto px-4 py-2.5 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-700 flex items-center justify-center shadow-md">
               <Compass className="w-4 h-4 text-white" />
@@ -262,17 +263,17 @@ export default function App() {
               <div className="flex items-center gap-1.5">
                 <h1 className="font-black text-sm leading-tight tracking-tight">AGROK</h1>
                 <span className="text-[9px] font-bold px-1.5 py-0.2 rounded uppercase bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                  {userRole}
+                  {userRole === 'supervisor' ? 'Gerente / Supervisor' : userRole}
                 </span>
               </div>
-              <p className="text-[10px] text-slate-400 truncate max-w-[180px]">
+              <p className="text-[10px] text-slate-400 truncate max-w-[200px]">
                 👤 {currentUser.nombre} (@{currentUser.username})
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-1.5">
-            {canAccessUsuarios && (
+            {canAccessAdminConsole && (
               <button
                 onClick={() => setIsBotModalOpen(true)}
                 className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl transition"
@@ -284,7 +285,7 @@ export default function App() {
 
             <button
               onClick={handleLogout}
-              className="px-2 py-1.5 bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-800 rounded-xl text-[11px] font-bold flex items-center gap-1 transition"
+              className="px-2.5 py-1.5 bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-800 rounded-xl text-[11px] font-bold flex items-center gap-1 transition"
               title="Cerrar sesión"
             >
               <LogOut className="w-3.5 h-3.5" />
@@ -295,8 +296,23 @@ export default function App() {
 
         {/* Barra de Navegación Segmentada según Permisos del Rol */}
         <div className="bg-slate-950/90 border-t border-slate-800 overflow-x-auto no-scrollbar">
-          <div className="max-w-4xl mx-auto px-2 flex min-w-max">
-            {/* Pantalla 1: Campo (Visible para Campo, Supervisor e IT) */}
+          <div className="max-w-6xl mx-auto px-2 flex min-w-max">
+            {/* Consola Web de Admin (Exclusiva para IT) */}
+            {canAccessAdminConsole && (
+              <button
+                onClick={() => setActiveTab('admin_console')}
+                className={`py-2 px-3 font-bold text-xs flex items-center gap-1.5 border-b-2 transition ${
+                  activeTab === 'admin_console'
+                    ? 'border-indigo-500 text-indigo-400 bg-slate-900/50'
+                    : 'border-transparent text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Settings className="w-3.5 h-3.5" />
+                <span>Consola Admin</span>
+              </button>
+            )}
+
+            {/* Pantalla 1: Campo (Visible para Operadores, Gerentes e IT) */}
             {canAccessCampo && (
               <button
                 onClick={() => setActiveTab('campo')}
@@ -307,7 +323,7 @@ export default function App() {
                 }`}
               >
                 <Smartphone className="w-3.5 h-3.5" />
-                <span>Reporte Campo</span>
+                <span>1. Reporte Campo</span>
                 {pendingCount > 0 && (
                   <span className="bg-amber-500 text-slate-950 text-[10px] font-black px-1.5 rounded-full">
                     {pendingCount}
@@ -316,7 +332,7 @@ export default function App() {
               </button>
             )}
 
-            {/* Pantalla 2: Tablero (Visible para Supervisor, Dirección e IT) */}
+            {/* Pantalla 2: Tablero (Visible para Gerente/Supervisor, Dirección e IT) */}
             {canAccessTablero && (
               <button
                 onClick={() => setActiveTab('tablero')}
@@ -327,11 +343,11 @@ export default function App() {
                 }`}
               >
                 <Shield className="w-3.5 h-3.5" />
-                <span>Tablero Operativo</span>
+                <span>2. Tablero Operativo (Gerencia)</span>
               </button>
             )}
 
-            {/* Pantalla 3: Maquinaria (Visible para Supervisor, Dirección e IT) */}
+            {/* Pantalla 3: Maquinaria (Visible para Gerente/Supervisor, Dirección e IT) */}
             {canAccessMaquinaria && (
               <button
                 onClick={() => setActiveTab('maquinaria')}
@@ -346,7 +362,7 @@ export default function App() {
               </button>
             )}
 
-            {/* Pantalla 4: Catálogos (Visible para Supervisor, Dirección e IT) */}
+            {/* Pantalla 4: Catálogos (Visible para Gerente/Supervisor, Dirección e IT) */}
             {canAccessCatalogos && (
               <button
                 onClick={() => setActiveTab('catalogos')}
@@ -372,22 +388,7 @@ export default function App() {
                 }`}
               >
                 <BarChart2 className="w-3.5 h-3.5" />
-                <span>Dirección & KPIs</span>
-              </button>
-            )}
-
-            {/* Pantalla 6: Usuarios & Roles (Visible para IT y Supervisor) */}
-            {canAccessUsuarios && (
-              <button
-                onClick={() => setActiveTab('usuarios')}
-                className={`py-2 px-3 font-bold text-xs flex items-center gap-1.5 border-b-2 transition ${
-                  activeTab === 'usuarios'
-                    ? 'border-indigo-500 text-indigo-400 bg-slate-900/50'
-                    : 'border-transparent text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <Users className="w-3.5 h-3.5" />
-                <span>Usuarios & Roles</span>
+                <span>3. Dirección & KPIs</span>
               </button>
             )}
           </div>
@@ -413,8 +414,15 @@ export default function App() {
         </div>
       )}
 
-      {/* Contenido Principal con Guardias de Seguridad */}
-      <main className="max-w-4xl mx-auto px-3 py-4 flex-1 w-full">
+      {/* Main Content Area */}
+      <main className="max-w-6xl mx-auto px-3 py-4 flex-1 w-full">
+        {activeTab === 'admin_console' && canAccessAdminConsole && (
+          <AdminWebConsole
+            currentUser={currentUser}
+            onRefreshData={refreshData}
+          />
+        )}
+
         {activeTab === 'campo' && canAccessCampo && (
           <OperatorView
             obras={obras}
@@ -461,12 +469,6 @@ export default function App() {
             tableroData={tableroData}
             botStatus={botStatus}
             onOpenBotModal={() => setIsBotModalOpen(true)}
-          />
-        )}
-
-        {activeTab === 'usuarios' && canAccessUsuarios && (
-          <UsuariosAdminView
-            currentUser={currentUser}
           />
         )}
       </main>

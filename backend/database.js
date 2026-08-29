@@ -11,12 +11,10 @@ const db = new sqlite3.Database(dbPath, (err) => {
   }
 });
 
-// Helper para hash de contraseñas con crypto nativo
 function hashPassword(password) {
   return crypto.createHash('sha256').update(password.trim()).digest('hex');
 }
 
-// Helpers de Promesas
 function run(sql, params = []) {
   return new Promise((resolve, reject) => {
     db.run(sql, params, function (err) {
@@ -46,7 +44,7 @@ function all(sql, params = []) {
 
 // Inicialización de esquemas según Modelo de Datos AGROK
 async function initDb() {
-  // 1. Usuarios con Autenticación y Roles
+  // 1. Usuarios con Funciones y Permisos
   await run(`
     CREATE TABLE IF NOT EXISTS usuario (
       id TEXT PRIMARY KEY,
@@ -56,14 +54,16 @@ async function initDb() {
       rol TEXT NOT NULL DEFAULT 'campo', -- campo, supervisor, direccion, it
       tg_user_id TEXT UNIQUE,
       tg_chat_id TEXT,
+      puede_crear_proyectos INTEGER DEFAULT 0,
       puede_cerrar_incidencias INTEGER DEFAULT 0,
       puede_registrar_medicion INTEGER DEFAULT 0,
+      puede_gestionar_materiales INTEGER DEFAULT 0,
       activo INTEGER DEFAULT 1,
       creado_en TEXT
     )
   `);
 
-  // 2. Entidades (Empresas del grupo)
+  // 2. Entidades
   await run(`
     CREATE TABLE IF NOT EXISTS entidad (
       id TEXT PRIMARY KEY,
@@ -81,6 +81,8 @@ async function initDb() {
       ciclo TEXT NOT NULL, -- "Maíz 2026"
       superficie_meta_ha REAL DEFAULT 0,
       fase_catalogo TEXT,
+      gerente_id TEXT,
+      estado TEXT DEFAULT 'activo',
       inicio DATE,
       fin DATE
     )
@@ -91,10 +93,10 @@ async function initDb() {
     CREATE TABLE IF NOT EXISTS predio (
       id TEXT PRIMARY KEY,
       nombre TEXT NOT NULL,
-      alias TEXT, -- JSON array
+      alias TEXT,
       superficie_legal_ha REAL,
       superficie_util_ha REAL,
-      regimen TEXT DEFAULT 'propio', -- propio, rentado, en_tramite, patrimonial
+      regimen TEXT DEFAULT 'propio',
       restricciones TEXT,
       odoo_partner_id INTEGER
     )
@@ -105,15 +107,15 @@ async function initDb() {
     CREATE TABLE IF NOT EXISTS obra (
       id TEXT PRIMARY KEY,
       nombre TEXT NOT NULL,
-      alias TEXT, -- JSON array de alias
+      alias TEXT,
       proyecto_id TEXT,
       entidad_id TEXT,
       fase_actual TEXT,
-      estado TEXT DEFAULT 'operacion', -- prospeccion, habilitacion, operacion, mantenimiento, standby, cerrada
+      estado TEXT DEFAULT 'operacion',
       tg_thread_id INTEGER,
       responsable_id TEXT,
-      FOREIGN KEY (proyecto_id) REFERENCES proyecto(id),
-      FOREIGN KEY (entidad_id) REFERENCES entidad(id)
+      FOREIGN KEY (proyecto_id) REFERENCES proyecto(id) ON DELETE SET NULL,
+      FOREIGN KEY (entidad_id) REFERENCES entidad(id) ON DELETE SET NULL
     )
   `);
 
@@ -203,7 +205,7 @@ async function initDb() {
     CREATE TABLE IF NOT EXISTS maquina (
       id TEXT PRIMARY KEY,
       nombre TEXT NOT NULL,
-      tipo TEXT NOT NULL, -- tractor, bulldozer, retro, dron, sembradora, rastra
+      tipo TEXT NOT NULL,
       propietaria_id TEXT,
       operadora_id TEXT,
       umbral_servicio_hrs REAL DEFAULT 300,
@@ -236,7 +238,7 @@ async function initDb() {
       id TEXT PRIMARY KEY,
       nombre TEXT NOT NULL,
       predio_id TEXT NOT NULL,
-      tipo TEXT NOT NULL, -- veleta, bomba, pozo, cerco, cisterna, riego, cabaña
+      tipo TEXT NOT NULL,
       umbral_dias_sin_lectura INTEGER DEFAULT 30,
       ultima_lectura_fecha TEXT,
       ultimo_estado TEXT DEFAULT 'ok',
@@ -344,34 +346,33 @@ async function initDb() {
     )
   `);
 
-  // Sembrado Inicial
   await seedInitialData();
 }
 
 async function seedInitialData() {
-  // 1. Usuarios del Sistema con Roles y Contraseñas
+  // 1. Usuarios con roles y funciones
   const userCount = (await get('SELECT COUNT(*) as c FROM usuario')).c;
   if (userCount === 0) {
-    console.log('👤 Creando usuarios base con roles y contraseñas...');
+    console.log('👤 Creando usuarios base con roles, contraseñas y permisos...');
     const now = new Date().toISOString();
 
     const users = [
-      ['usr-admin', 'admin', hashPassword('admin123'), 'Administrador AGROK', 'it', 1, 1, now],
-      ['usr-super', 'supervisor', hashPassword('super123'), 'Ing. Carlos Supervisor', 'supervisor', 1, 1, now],
-      ['usr-lider', 'direccion', hashPassword('lider123'), 'Dirección General AGROK', 'direccion', 1, 1, now],
-      ['usr-campo', 'operador', hashPassword('campo123'), 'Abner Operador de Campo', 'campo', 0, 0, now],
-      ['usr-armando', 'armando', hashPassword('armando123'), 'Armando Operador Tractor', 'campo', 0, 0, now]
+      ['usr-admin', 'admin', hashPassword('admin123'), 'Administrador AGROK', 'it', 1, 1, 1, 1, now],
+      ['usr-gerente', 'supervisor', hashPassword('super123'), 'Ing. Carlos Gerente de Operaciones', 'supervisor', 1, 1, 0, 1, now],
+      ['usr-lider', 'direccion', hashPassword('lider123'), 'Lic. Roberto Dirección General', 'direccion', 1, 1, 1, 1, now],
+      ['usr-campo', 'operador', hashPassword('campo123'), 'Abner Operador de Campo', 'campo', 0, 0, 0, 0, now],
+      ['usr-armando', 'armando', hashPassword('armando123'), 'Armando Operador Tractor', 'campo', 0, 0, 0, 0, now]
     ];
 
-    for (const [id, username, passHash, nombre, rol, puedeCerrar, puedeMedir, creado] of users) {
+    for (const [id, username, passHash, nombre, rol, crearProj, cerrarInc, regMed, gestMat, creado] of users) {
       await run(`
-        INSERT INTO usuario (id, username, password_hash, nombre, rol, puede_cerrar_incidencias, puede_registrar_medicion, creado_en)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `, [id, username, passHash, nombre, rol, puedeCerrar, puedeMedir, creado]);
+        INSERT INTO usuario (id, username, password_hash, nombre, rol, puede_crear_proyectos, puede_cerrar_incidencias, puede_registrar_medicion, puede_gestionar_materiales, creado_en)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [id, username, passHash, nombre, rol, crearProj, cerrarInc, regMed, gestMat, creado]);
     }
   }
 
-  // 2. Catálogo Dinámico de Actividades
+  // 2. Actividades
   const actCount = (await get('SELECT COUNT(*) as c FROM actividad_catalogo')).c;
   if (actCount === 0) {
     const actividades = [
@@ -382,7 +383,7 @@ async function seedInitialData() {
       ['desmonte', 'Desmonte de terreno', 'ha', 'preparacion'],
       ['destronque', 'Destronque', 'ha', 'preparacion'],
       ['desenraizado', 'Desenraizado', 'ha', 'preparacion'],
-      ['fumigacion', 'Fumigación y control fitosanitario', 'ha', 'agricola'],
+      ['fumigacion', 'Fumigación fitosanitaria', 'ha', 'agricola'],
       ['fertilizacion', 'Aplicación de fertilizante', 'ha', 'agricola'],
       ['monitoreo', 'Monitoreo de plagas / cultivo', 'ha', 'agricola'],
       ['posteo', 'Colocación de postes', 'pieza', 'infraestructura'],
@@ -399,7 +400,7 @@ async function seedInitialData() {
     }
   }
 
-  // 3. Catálogo Dinámico de Roles de Cuadrilla
+  // 3. Roles de Cuadrilla
   const rolCuadCount = (await get('SELECT COUNT(*) as c FROM rol_cuadrilla_catalogo')).c;
   if (rolCuadCount === 0) {
     const roles = [
@@ -416,12 +417,9 @@ async function seedInitialData() {
     }
   }
 
-  // 4. Catálogos base de Entidades, Proyectos, Predios, Obras y Maquinaria
+  // 4. Catálogos base
   const entidadCount = (await get('SELECT COUNT(*) as c FROM entidad')).c;
   if (entidadCount === 0) {
-    console.log('🌱 Sembrando catálogos base...');
-    
-    // Entidades
     const entidades = [
       ['ITZ', 'ITZ', 1],
       ['McClick', 'McClick', 2],
@@ -435,16 +433,14 @@ async function seedInitialData() {
       await run('INSERT INTO entidad (id, nombre, odoo_company_id) VALUES (?, ?, ?)', [id, nombre, odooId]);
     }
 
-    // Proyectos
     await run(`
-      INSERT INTO proyecto (id, nombre, tipo, ciclo, superficie_meta_ha, fase_catalogo, inicio, fin)
+      INSERT INTO proyecto (id, nombre, tipo, ciclo, superficie_meta_ha, fase_catalogo, gerente_id, inicio, fin)
       VALUES 
-        ('PRJ-MAIZ-2026', 'Proyecto Maíz 2026', 'maiz', 'Maíz 2026', 120.0, 'V0_V2', '2026-05-01', '2026-11-30'),
-        ('PRJ-REFOR-2026', 'Reforestación Parque Jabin', 'reforestacion', 'Reforestación 2026', 45.0, 'mantenimiento', '2026-01-01', '2026-12-31'),
-        ('PRJ-INFRA-2026', 'Infraestructura y Cercado Ganadero', 'infraestructura', 'Infraestructura 2026', 30.0, 'cercado y corral', '2026-03-01', '2026-10-31')
+        ('PRJ-MAIZ-2026', 'Proyecto Maíz 2026', 'maiz', 'Maíz 2026', 120.0, 'V0_V2', 'Ing. Carlos Supervisor', '2026-05-01', '2026-11-30'),
+        ('PRJ-REFOR-2026', 'Reforestación Parque Jabin', 'reforestacion', 'Reforestación 2026', 45.0, 'mantenimiento', 'Karen', '2026-01-01', '2026-12-31'),
+        ('PRJ-INFRA-2026', 'Infraestructura y Cercado Ganadero', 'infraestructura', 'Infraestructura 2026', 30.0, 'cercado y corral', 'Karen', '2026-03-01', '2026-10-31')
     `);
 
-    // 17 Predios
     const predios = [
       ['san_alberto', 'San Alberto', JSON.stringify(['Predio San Alberto', 'Cabaña-Cultivo']), 11.04, 11.04, 'propio', ''],
       ['san_luis', 'San Luis', JSON.stringify(['Predio San Luis']), 16.03, 16.03, 'propio', '5 postes CFE'],
@@ -468,7 +464,6 @@ async function seedInitialData() {
       await run('INSERT INTO predio (id, nombre, alias, superficie_legal_ha, superficie_util_ha, regimen, restricciones) VALUES (?, ?, ?, ?, ?, ?, ?)', [id, nombre, alias, supLegal, supUtil, regimen, restr]);
     }
 
-    // Obras
     const obras = [
       ['guayeme', 'Maíz Guayeme', JSON.stringify(['Guayeme']), 'PRJ-MAIZ-2026', 'Agrokool', 'monitoreo y control de plaga', 'operacion', 101, 'Karen / Abner'],
       ['sta_teresita', 'Desmonte Santa Teresita', JSON.stringify(['Santa Teresita', 'Magdalena']), 'PRJ-MAIZ-2026', 'Agrokool', 'despalme con retro', 'operacion', 102, 'Beche / Dorantes'],
@@ -482,7 +477,6 @@ async function seedInitialData() {
       await run('INSERT INTO obra (id, nombre, alias, proyecto_id, entidad_id, fase_actual, estado, tg_thread_id, responsable_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [id, nombre, alias, projId, entidadId, fase, estado, threadId, resp]);
     }
 
-    // Asignar Predios
     await run("INSERT INTO obra_predio (obra_id, predio_id) VALUES ('guayeme', 'guayeme')");
     await run("INSERT INTO obra_predio (obra_id, predio_id) VALUES ('sta_teresita', 'santa_teresita')");
     await run("INSERT INTO obra_predio (obra_id, predio_id) VALUES ('cluster_mangos', 'los_mangos')");
@@ -493,7 +487,6 @@ async function seedInitialData() {
     await run("INSERT INTO obra_predio (obra_id, predio_id) VALUES ('jabin', 'parque_jabin')");
     await run("INSERT INTO obra_predio (obra_id, predio_id) VALUES ('potrero_yeguas', 'potrero_yeguas')");
 
-    // Máquinas
     const maquinas = [
       ['puma', 'Puma (CASE IH 155)', 'tractor', 'Aspromex', 'Agrokool', 300, 288.0, 'Armando'],
       ['bulldozer_d6', 'Bulldozer D6', 'bulldozer', 'Aspromex', 'Agrokool', 300, 1420.5, 'Operador D6'],
@@ -506,7 +499,6 @@ async function seedInitialData() {
       await run('INSERT INTO maquina (id, nombre, tipo, propietaria_id, operadora_id, umbral_servicio_hrs, horometro_actual, operador_habitual) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [id, nombre, tipo, prop, op, umbral, horo, opHab]);
     }
 
-    // Activos
     const activos = [
       ['veleta_jabin', 'Veleta Parque Jabin', 'parque_jabin', 'veleta', 30, '2026-04-01', 'ok'],
       ['bomba_san_alberto', 'Bomba de pozo Rodase', 'san_alberto', 'bomba', 30, '2026-03-17', 'ok'],
@@ -518,7 +510,6 @@ async function seedInitialData() {
       await run('INSERT INTO activo (id, nombre, predio_id, tipo, umbral_dias_sin_lectura, ultima_lectura_fecha, ultimo_estado) VALUES (?, ?, ?, ?, ?, ?, ?)', [id, nombre, predioId, tipo, umbral, ultFec, ultEst]);
     }
 
-    // Incidencias
     await run(`
       INSERT INTO incidencia (folio, tipo, obra_id, maquina_id, estado, abierta_en, descripcion, causa_raiz)
       VALUES 
@@ -526,7 +517,6 @@ async function seedInitialData() {
         ('F-21', 'plaga', 'guayeme', NULL, 'abierta', '2026-08-25 09:30:00', 'Brote de gusano cogollero detectado en lote 1', '')
     `);
 
-    // Materiales
     await run(`
       INSERT INTO material (obra_id, insumo, requerido, en_sitio, pedido, unidad, eta, actualizado_en, autor_nombre)
       VALUES 
@@ -535,7 +525,6 @@ async function seedInitialData() {
         ('guayeme', 'Fertilizante Triple 16', 40, 40, 0, 'bulto', '2026-08-20', '2026-08-28 14:00:00', 'Abner')
     `);
 
-    // Mediciones
     await run(`
       INSERT INTO medicion (obra_id, predio_id, fecha, hectareas, fuente, autor_nombre)
       VALUES ('sta_teresita', 'santa_teresita', '2026-07-14', 12.3, 'dron', 'Abner (DJI T70P)')

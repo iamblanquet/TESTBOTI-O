@@ -14,7 +14,7 @@ app.use(cors());
 app.use(express.json());
 
 // ==========================================
-// 1. AUTENTICACIÓN & GESTIÓN DE USUARIOS
+// 1. AUTENTICACIÓN & GESTIÓN DE USUARIOS Y ROLES
 // ==========================================
 
 app.post('/api/auth/login', async (req, res) => {
@@ -26,7 +26,7 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     const pHash = hashPassword(password);
     const user = await get(`
-      SELECT id, username, nombre, rol, tg_user_id, tg_chat_id, puede_cerrar_incidencias, puede_registrar_medicion, activo 
+      SELECT id, username, nombre, rol, tg_user_id, tg_chat_id, puede_crear_proyectos, puede_cerrar_incidencias, puede_registrar_medicion, puede_gestionar_materiales, activo 
       FROM usuario 
       WHERE username = ? AND password_hash = ? AND activo = 1
     `, [username.trim().toLowerCase(), pHash]);
@@ -48,7 +48,7 @@ app.post('/api/auth/login', async (req, res) => {
 app.get('/api/usuarios', async (req, res) => {
   try {
     const usuarios = await all(`
-      SELECT id, username, nombre, rol, tg_user_id, tg_chat_id, puede_cerrar_incidencias, puede_registrar_medicion, activo, creado_en 
+      SELECT id, username, nombre, rol, tg_user_id, tg_chat_id, puede_crear_proyectos, puede_cerrar_incidencias, puede_registrar_medicion, puede_gestionar_materiales, activo, creado_en 
       FROM usuario 
       ORDER BY creado_en DESC
     `);
@@ -60,7 +60,7 @@ app.get('/api/usuarios', async (req, res) => {
 });
 
 app.post('/api/usuarios', async (req, res) => {
-  const { username, password, nombre, rol, puede_cerrar_incidencias, puede_registrar_medicion, tg_user_id } = req.body;
+  const { username, password, nombre, rol, puede_crear_proyectos, puede_cerrar_incidencias, puede_registrar_medicion, puede_gestionar_materiales, tg_user_id } = req.body;
   if (!username || !password || !nombre) {
     return res.status(400).json({ success: false, error: 'Usuario, contraseña y nombre son obligatorios' });
   }
@@ -69,22 +69,42 @@ app.post('/api/usuarios', async (req, res) => {
     const userId = `usr-${Date.now().toString(36)}`;
     const pHash = hashPassword(password);
 
+    // Asignar funciones por defecto según el rol si no se especifican
+    let crearProj = puede_crear_proyectos ? 1 : 0;
+    let cerrarInc = puede_cerrar_incidencias ? 1 : 0;
+    let gestMat = puede_gestionar_materiales ? 1 : 0;
+    let regMed = puede_registrar_medicion ? 1 : 0;
+
+    if (rol === 'supervisor' || rol === 'direccion' || rol === 'it') {
+      crearProj = 1;
+      cerrarInc = 1;
+      gestMat = 1;
+    }
+    if (rol === 'it' || rol === 'direccion') {
+      regMed = 1;
+    }
+
     await run(`
-      INSERT INTO usuario (id, username, password_hash, nombre, rol, puede_cerrar_incidencias, puede_registrar_medicion, tg_user_id, creado_en)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO usuario (
+        id, username, password_hash, nombre, rol,
+        puede_crear_proyectos, puede_cerrar_incidencias, puede_registrar_medicion, puede_gestionar_materiales,
+        tg_user_id, creado_en
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       userId,
       username.trim().toLowerCase(),
       pHash,
       nombre.trim(),
       rol || 'campo',
-      puede_cerrar_incidencias ? 1 : 0,
-      puede_registrar_medicion ? 1 : 0,
+      crearProj,
+      cerrarInc,
+      regMed,
+      gestMat,
       tg_user_id || null,
       new Date().toISOString()
     ]);
 
-    res.json({ success: true, message: `Usuario @${username} creado con éxito` });
+    res.json({ success: true, message: `Usuario @${username} creado con éxito`, userId });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -92,7 +112,7 @@ app.post('/api/usuarios', async (req, res) => {
 
 app.put('/api/usuarios/:id', async (req, res) => {
   const { id } = req.params;
-  const { nombre, rol, puede_cerrar_incidencias, puede_registrar_medicion, password, activo, tg_user_id } = req.body;
+  const { nombre, rol, puede_crear_proyectos, puede_cerrar_incidencias, puede_registrar_medicion, puede_gestionar_materiales, password, activo, tg_user_id } = req.body;
 
   try {
     if (password && password.trim().length > 0) {
@@ -104,16 +124,20 @@ app.put('/api/usuarios/:id', async (req, res) => {
       UPDATE usuario 
       SET nombre = COALESCE(?, nombre),
           rol = COALESCE(?, rol),
+          puede_crear_proyectos = COALESCE(?, puede_crear_proyectos),
           puede_cerrar_incidencias = COALESCE(?, puede_cerrar_incidencias),
           puede_registrar_medicion = COALESCE(?, puede_registrar_medicion),
+          puede_gestionar_materiales = COALESCE(?, puede_gestionar_materiales),
           activo = COALESCE(?, activo),
           tg_user_id = COALESCE(?, tg_user_id)
       WHERE id = ?
     `, [
       nombre ? nombre.trim() : null,
       rol || null,
+      puede_crear_proyectos !== undefined ? (puede_crear_proyectos ? 1 : 0) : null,
       puede_cerrar_incidencias !== undefined ? (puede_cerrar_incidencias ? 1 : 0) : null,
       puede_registrar_medicion !== undefined ? (puede_registrar_medicion ? 1 : 0) : null,
+      puede_gestionar_materiales !== undefined ? (puede_gestionar_materiales ? 1 : 0) : null,
       activo !== undefined ? (activo ? 1 : 0) : null,
       tg_user_id || null,
       id
@@ -136,7 +160,88 @@ app.delete('/api/usuarios/:id', async (req, res) => {
 });
 
 // ==========================================
-// 2. TABLERO OPERATIVO (4 WIDGETS CANÓNICOS)
+// 2. PROYECTOS & TAREAS (Para Gerentes / Supervisores y Admin)
+// ==========================================
+
+app.get('/api/proyectos', async (req, res) => {
+  try {
+    const proyectos = await all('SELECT * FROM proyecto ORDER BY id ASC');
+    const obras = await all('SELECT * FROM obra');
+
+    const result = proyectos.map(p => {
+      const pObras = obras.filter(o => o.proyecto_id === p.id);
+      return {
+        ...p,
+        obras_count: pObras.length,
+        obras: pObras
+      };
+    });
+
+    res.json({ success: true, proyectos: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/proyectos', async (req, res) => {
+  const { id, nombre, tipo, ciclo, superficie_meta_ha, fase_catalogo, gerente_id, inicio, fin } = req.body;
+  if (!nombre) return res.status(400).json({ success: false, error: 'Nombre del proyecto requerido' });
+
+  try {
+    const cleanId = id ? id.trim() : `PRJ-${Date.now().toString(36).toUpperCase()}`;
+    await run(`
+      INSERT INTO proyecto (id, nombre, tipo, ciclo, superficie_meta_ha, fase_catalogo, gerente_id, inicio, fin)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      cleanId,
+      nombre.trim(),
+      tipo || 'maiz',
+      ciclo || `${tipo || 'Maíz'} 2026`,
+      Number(superficie_meta_ha) || 0,
+      fase_catalogo || 'V0_V2',
+      gerente_id || 'Gerente Asignado',
+      inicio || new Date().toISOString().split('T')[0],
+      fin || null
+    ]);
+
+    res.json({ success: true, message: 'Proyecto creado exitosamente', projectId: cleanId });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/proyectos/:id', async (req, res) => {
+  const { id } = req.params;
+  const { nombre, tipo, ciclo, superficie_meta_ha, fase_catalogo, gerente_id, estado, inicio, fin } = req.body;
+
+  try {
+    await run(`
+      UPDATE proyecto
+      SET nombre = COALESCE(?, nombre),
+          tipo = COALESCE(?, tipo),
+          ciclo = COALESCE(?, ciclo),
+          superficie_meta_ha = COALESCE(?, superficie_meta_ha),
+          fase_catalogo = COALESCE(?, fase_catalogo),
+          gerente_id = COALESCE(?, gerente_id),
+          estado = COALESCE(?, estado),
+          inicio = COALESCE(?, inicio),
+          fin = COALESCE(?, fin)
+      WHERE id = ?
+    `, [
+      nombre, tipo, ciclo,
+      superficie_meta_ha !== undefined ? Number(superficie_meta_ha) : null,
+      fase_catalogo, gerente_id, estado, inicio, fin,
+      id
+    ]);
+
+    res.json({ success: true, message: 'Proyecto actualizado' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==========================================
+// 3. TABLERO OPERATIVO (4 WIDGETS CANÓNICOS)
 // ==========================================
 
 app.get('/api/tablero/hoy', async (req, res) => {
@@ -251,7 +356,7 @@ app.get('/api/tablero/hoy', async (req, res) => {
 });
 
 // ==========================================
-// 3. CATÁLOGOS DINÁMICOS CRUD (OBRAS & PREDIOS)
+// 4. OBRAS, PREDIOS, ACTIVIDADES Y ROLES
 // ==========================================
 
 app.get('/api/obras', async (req, res) => {
@@ -261,6 +366,7 @@ app.get('/api/obras', async (req, res) => {
     const obraPredios = await all('SELECT * FROM obra_predio');
     const actividades = await all('SELECT * FROM actividad_catalogo ORDER BY nombre ASC');
     const rolesCuadrilla = await all('SELECT * FROM rol_cuadrilla_catalogo ORDER BY nombre ASC');
+    const proyectos = await all('SELECT * FROM proyecto ORDER BY nombre ASC');
 
     const result = obras.map(o => {
       const pIds = obraPredios.filter(op => op.obra_id === o.id).map(op => op.predio_id);
@@ -276,7 +382,8 @@ app.get('/api/obras', async (req, res) => {
       obras: result,
       predios: predios.map(p => ({ ...p, alias: p.alias ? JSON.parse(p.alias) : [] })),
       actividades,
-      rolesCuadrilla
+      rolesCuadrilla,
+      proyectos
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -285,10 +392,10 @@ app.get('/api/obras', async (req, res) => {
 
 app.post('/api/obras', async (req, res) => {
   const { id, nombre, proyecto_id, entidad_id, fase_actual, estado, responsable_id, predio_ids } = req.body;
-  if (!id || !nombre) return res.status(400).json({ success: false, error: 'ID y Nombre requeridos' });
+  if (!nombre) return res.status(400).json({ success: false, error: 'Nombre de obra requerido' });
 
   try {
-    const cleanId = id.trim().toLowerCase().replace(/\s+/g, '_');
+    const cleanId = id ? id.trim().toLowerCase().replace(/\s+/g, '_') : `obra_${Date.now().toString(36)}`;
     await run(`
       INSERT INTO obra (id, nombre, proyecto_id, entidad_id, fase_actual, estado, responsable_id)
       VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -300,7 +407,7 @@ app.post('/api/obras', async (req, res) => {
       }
     }
 
-    res.json({ success: true, message: 'Obra creada exitosamente' });
+    res.json({ success: true, message: 'Obra creada exitosamente', obraId: cleanId });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -308,7 +415,7 @@ app.post('/api/obras', async (req, res) => {
 
 app.put('/api/obras/:id', async (req, res) => {
   const { id } = req.params;
-  const { nombre, fase_actual, estado, responsable_id, predio_ids } = req.body;
+  const { nombre, fase_actual, estado, responsable_id, proyecto_id, predio_ids } = req.body;
 
   try {
     await run(`
@@ -316,9 +423,10 @@ app.put('/api/obras/:id', async (req, res) => {
       SET nombre = COALESCE(?, nombre),
           fase_actual = COALESCE(?, fase_actual),
           estado = COALESCE(?, estado),
-          responsable_id = COALESCE(?, responsable_id)
+          responsable_id = COALESCE(?, responsable_id),
+          proyecto_id = COALESCE(?, proyecto_id)
       WHERE id = ?
-    `, [nombre, fase_actual, estado, responsable_id, id]);
+    `, [nombre, fase_actual, estado, responsable_id, proyecto_id, id]);
 
     if (predio_ids && Array.isArray(predio_ids)) {
       await run('DELETE FROM obra_predio WHERE obra_id = ?', [id]);
@@ -345,10 +453,10 @@ app.get('/api/predios', async (req, res) => {
 
 app.post('/api/predios', async (req, res) => {
   const { id, nombre, superficie_legal_ha, superficie_util_ha, regimen, restricciones } = req.body;
-  if (!id || !nombre) return res.status(400).json({ success: false, error: 'ID y Nombre requeridos' });
+  if (!nombre) return res.status(400).json({ success: false, error: 'Nombre de predio requerido' });
 
   try {
-    const cleanId = id.trim().toLowerCase().replace(/\s+/g, '_');
+    const cleanId = id ? id.trim().toLowerCase().replace(/\s+/g, '_') : `predio_${Date.now().toString(36)}`;
     await run(`
       INSERT INTO predio (id, nombre, alias, superficie_legal_ha, superficie_util_ha, regimen, restricciones)
       VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -362,14 +470,14 @@ app.post('/api/predios', async (req, res) => {
       restricciones || ''
     ]);
 
-    res.json({ success: true, message: 'Predio registrado exitosamente' });
+    res.json({ success: true, message: 'Predio registrado exitosamente', predioId: cleanId });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // ==========================================
-// 4. REPORTES OFFLINE-FIRST & HISTORIAL
+// 5. REPORTES OFFLINE-FIRST & HISTORIAL
 // ==========================================
 
 app.post('/api/reports/sync', async (req, res) => {
@@ -493,10 +601,9 @@ app.get('/api/reportes', async (req, res) => {
 });
 
 // ==========================================
-// 5. INCIDENCIAS, MAQUINARIA, ACTIVOS & MATERIALES
+// 6. INCIDENCIAS, MAQUINARIA, ACTIVOS & MATERIALES
 // ==========================================
 
-// Incidencias
 app.get('/api/incidencias', async (req, res) => {
   try {
     const incidencias = await all(`
@@ -580,16 +687,16 @@ app.get('/api/maquinaria', async (req, res) => {
 
 app.post('/api/maquinaria', async (req, res) => {
   const { id, nombre, tipo, propietaria_id, umbral_servicio_hrs, horometro_actual, operador_habitual } = req.body;
-  if (!id || !nombre) return res.status(400).json({ success: false, error: 'ID y Nombre requeridos' });
+  if (!nombre) return res.status(400).json({ success: false, error: 'Nombre requerido' });
 
   try {
-    const cleanId = id.trim().toLowerCase().replace(/\s+/g, '_');
+    const cleanId = id ? id.trim().toLowerCase().replace(/\s+/g, '_') : `maq_${Date.now().toString(36)}`;
     await run(`
       INSERT INTO maquina (id, nombre, tipo, propietaria_id, umbral_servicio_hrs, horometro_actual, operador_habitual)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `, [cleanId, nombre.trim(), tipo || 'tractor', propietaria_id || 'Aspromex', Number(umbral_servicio_hrs) || 300, Number(horometro_actual) || 0, operador_habitual || 'General']);
 
-    res.json({ success: true, message: 'Máquina registrada con éxito' });
+    res.json({ success: true, message: 'Máquina registrada con éxito', maquinaId: cleanId });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -632,16 +739,16 @@ app.get('/api/activos', async (req, res) => {
 
 app.post('/api/activos', async (req, res) => {
   const { id, nombre, predio_id, tipo, umbral_dias_sin_lectura } = req.body;
-  if (!id || !nombre || !predio_id) return res.status(400).json({ success: false, error: 'Campos requeridos faltantes' });
+  if (!nombre || !predio_id) return res.status(400).json({ success: false, error: 'Campos requeridos faltantes' });
 
   try {
-    const cleanId = id.trim().toLowerCase().replace(/\s+/g, '_');
+    const cleanId = id ? id.trim().toLowerCase().replace(/\s+/g, '_') : `activo_${Date.now().toString(36)}`;
     await run(`
       INSERT INTO activo (id, nombre, predio_id, tipo, umbral_dias_sin_lectura, ultima_lectura_fecha, ultimo_estado)
       VALUES (?, ?, ?, ?, ?, ?, 'ok')
     `, [cleanId, nombre.trim(), predio_id, tipo || 'bomba', Number(umbral_dias_sin_lectura) || 30, new Date().toISOString().split('T')[0]]);
 
-    res.json({ success: true, message: 'Activo registrado' });
+    res.json({ success: true, message: 'Activo registrado', activoId: cleanId });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
