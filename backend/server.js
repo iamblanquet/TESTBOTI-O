@@ -880,20 +880,4 @@ async function startServer() {
   }
 }
 
-startServer();ction startServer() {
-  await initDb();
-  const savedTokenRow = await get("SELECT value FROM system_settings WHERE key = 'TELEGRAM_BOT_TOKEN'");
-  const token = process.env.TELEGRAM_BOT_TOKEN || (savedTokenRow ? savedTokenRow.value : null);
-
-  if (token) {
-    await initTelegramBot(token, app);
-  } else {
-    console.log('💡 [Telegram Bot AGROK] Ingresa tu token de @BotFather en el panel.');
-  }
-
-  app.listen(PORT, () => {
-    console.log(`🚀 Servidor AGROK Backend iniciado en: http://localhost:${PORT}`);
-  });
-}
-
 startServer();
