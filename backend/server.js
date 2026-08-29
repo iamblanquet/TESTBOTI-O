@@ -3,7 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
-const { initDb, run, get, all } = require('./database');
+const { initDb, run, get, all, hashPassword } = require('./database');
 const { initTelegramBot, getBotStatus, getBotInstance } = require('./telegramService');
 const { parseDailyReport } = require('./parser');
 
@@ -13,20 +13,132 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
-// 0. Telegram Webhook Endpoint (Para Render, elimina 409 Conflict)
-app.post('/api/telegram/webhook', (req, res) => {
-  const botInstance = getBotInstance();
-  if (botInstance) {
-    try {
-      botInstance.processUpdate(req.body);
-    } catch (err) {
-      console.error('Error procesando update de webhook:', err);
-    }
+// ==========================================
+// 1. AUTENTICACIÓN & GESTIÓN DE USUARIOS
+// ==========================================
+
+app.post('/api/auth/login', async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ success: false, error: 'Usuario y contraseña requeridos' });
   }
-  res.sendStatus(200);
+
+  try {
+    const pHash = hashPassword(password);
+    const user = await get(`
+      SELECT id, username, nombre, rol, tg_user_id, tg_chat_id, puede_cerrar_incidencias, puede_registrar_medicion, activo 
+      FROM usuario 
+      WHERE username = ? AND password_hash = ? AND activo = 1
+    `, [username.trim().toLowerCase(), pHash]);
+
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'Credenciales incorrectas o usuario inactivo' });
+    }
+
+    res.json({
+      success: true,
+      user,
+      token: `session-${user.id}-${Date.now()}`
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
-// 1. Tablero Hoy (Alimenta los 4 widgets canónicos según docs/3)
+app.get('/api/usuarios', async (req, res) => {
+  try {
+    const usuarios = await all(`
+      SELECT id, username, nombre, rol, tg_user_id, tg_chat_id, puede_cerrar_incidencias, puede_registrar_medicion, activo, creado_en 
+      FROM usuario 
+      ORDER BY creado_en DESC
+    `);
+    const subscribers = await all('SELECT * FROM telegram_subscribers');
+    res.json({ success: true, usuarios, subscribers });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/usuarios', async (req, res) => {
+  const { username, password, nombre, rol, puede_cerrar_incidencias, puede_registrar_medicion, tg_user_id } = req.body;
+  if (!username || !password || !nombre) {
+    return res.status(400).json({ success: false, error: 'Usuario, contraseña y nombre son obligatorios' });
+  }
+
+  try {
+    const userId = `usr-${Date.now().toString(36)}`;
+    const pHash = hashPassword(password);
+
+    await run(`
+      INSERT INTO usuario (id, username, password_hash, nombre, rol, puede_cerrar_incidencias, puede_registrar_medicion, tg_user_id, creado_en)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      userId,
+      username.trim().toLowerCase(),
+      pHash,
+      nombre.trim(),
+      rol || 'campo',
+      puede_cerrar_incidencias ? 1 : 0,
+      puede_registrar_medicion ? 1 : 0,
+      tg_user_id || null,
+      new Date().toISOString()
+    ]);
+
+    res.json({ success: true, message: `Usuario @${username} creado con éxito` });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/usuarios/:id', async (req, res) => {
+  const { id } = req.params;
+  const { nombre, rol, puede_cerrar_incidencias, puede_registrar_medicion, password, activo, tg_user_id } = req.body;
+
+  try {
+    if (password && password.trim().length > 0) {
+      const pHash = hashPassword(password);
+      await run('UPDATE usuario SET password_hash = ? WHERE id = ?', [pHash, id]);
+    }
+
+    await run(`
+      UPDATE usuario 
+      SET nombre = COALESCE(?, nombre),
+          rol = COALESCE(?, rol),
+          puede_cerrar_incidencias = COALESCE(?, puede_cerrar_incidencias),
+          puede_registrar_medicion = COALESCE(?, puede_registrar_medicion),
+          activo = COALESCE(?, activo),
+          tg_user_id = COALESCE(?, tg_user_id)
+      WHERE id = ?
+    `, [
+      nombre ? nombre.trim() : null,
+      rol || null,
+      puede_cerrar_incidencias !== undefined ? (puede_cerrar_incidencias ? 1 : 0) : null,
+      puede_registrar_medicion !== undefined ? (puede_registrar_medicion ? 1 : 0) : null,
+      activo !== undefined ? (activo ? 1 : 0) : null,
+      tg_user_id || null,
+      id
+    ]);
+
+    res.json({ success: true, message: 'Usuario actualizado con éxito' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/usuarios/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    await run('UPDATE usuario SET activo = 0 WHERE id = ?', [id]);
+    res.json({ success: true, message: 'Usuario desactivado' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==========================================
+// 2. TABLERO OPERATIVO (4 WIDGETS CANÓNICOS)
+// ==========================================
+
 app.get('/api/tablero/hoy', async (req, res) => {
   try {
     const today = new Date().toISOString().split('T')[0];
@@ -134,17 +246,21 @@ app.get('/api/tablero/hoy', async (req, res) => {
       activos: activos
     });
   } catch (error) {
-    console.error('Error en /api/tablero/hoy:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// 2. Obras y Predios
+// ==========================================
+// 3. CATÁLOGOS DINÁMICOS CRUD (OBRAS & PREDIOS)
+// ==========================================
+
 app.get('/api/obras', async (req, res) => {
   try {
     const obras = await all('SELECT * FROM obra ORDER BY id ASC');
     const predios = await all('SELECT * FROM predio ORDER BY nombre ASC');
     const obraPredios = await all('SELECT * FROM obra_predio');
+    const actividades = await all('SELECT * FROM actividad_catalogo ORDER BY nombre ASC');
+    const rolesCuadrilla = await all('SELECT * FROM rol_cuadrilla_catalogo ORDER BY nombre ASC');
 
     const result = obras.map(o => {
       const pIds = obraPredios.filter(op => op.obra_id === o.id).map(op => op.predio_id);
@@ -158,7 +274,9 @@ app.get('/api/obras', async (req, res) => {
     res.json({
       success: true,
       obras: result,
-      predios: predios.map(p => ({ ...p, alias: p.alias ? JSON.parse(p.alias) : [] }))
+      predios: predios.map(p => ({ ...p, alias: p.alias ? JSON.parse(p.alias) : [] })),
+      actividades,
+      rolesCuadrilla
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -166,38 +284,94 @@ app.get('/api/obras', async (req, res) => {
 });
 
 app.post('/api/obras', async (req, res) => {
-  const { id, nombre, proyecto_id, fase_actual, estado, responsable_id, predio_ids } = req.body;
+  const { id, nombre, proyecto_id, entidad_id, fase_actual, estado, responsable_id, predio_ids } = req.body;
   if (!id || !nombre) return res.status(400).json({ success: false, error: 'ID y Nombre requeridos' });
 
   try {
+    const cleanId = id.trim().toLowerCase().replace(/\s+/g, '_');
     await run(`
       INSERT INTO obra (id, nombre, proyecto_id, entidad_id, fase_actual, estado, responsable_id)
-      VALUES (?, ?, ?, 'Agrokool', ?, ?, ?)
-    `, [id.trim().toLowerCase(), nombre.trim(), proyecto_id || 'PRJ-MAIZ-2026', fase_actual || 'operacion', estado || 'operacion', responsable_id || 'Campo']);
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [cleanId, nombre.trim(), proyecto_id || 'PRJ-MAIZ-2026', entidad_id || 'Agrokool', fase_actual || 'operacion', estado || 'operacion', responsable_id || 'Campo']);
 
     if (predio_ids && Array.isArray(predio_ids)) {
       for (const pid of predio_ids) {
-        await run('INSERT INTO obra_predio (obra_id, predio_id) VALUES (?, ?)', [id.trim().toLowerCase(), pid]);
+        await run('INSERT OR IGNORE INTO obra_predio (obra_id, predio_id) VALUES (?, ?)', [cleanId, pid]);
       }
     }
 
-    res.json({ success: true, message: 'Obra creada con éxito' });
+    res.json({ success: true, message: 'Obra creada exitosamente' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// 3. Predios
+app.put('/api/obras/:id', async (req, res) => {
+  const { id } = req.params;
+  const { nombre, fase_actual, estado, responsable_id, predio_ids } = req.body;
+
+  try {
+    await run(`
+      UPDATE obra 
+      SET nombre = COALESCE(?, nombre),
+          fase_actual = COALESCE(?, fase_actual),
+          estado = COALESCE(?, estado),
+          responsable_id = COALESCE(?, responsable_id)
+      WHERE id = ?
+    `, [nombre, fase_actual, estado, responsable_id, id]);
+
+    if (predio_ids && Array.isArray(predio_ids)) {
+      await run('DELETE FROM obra_predio WHERE obra_id = ?', [id]);
+      for (const pid of predio_ids) {
+        await run('INSERT INTO obra_predio (obra_id, predio_id) VALUES (?, ?)', [id, pid]);
+      }
+    }
+
+    res.json({ success: true, message: 'Obra actualizada' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Predios CRUD
 app.get('/api/predios', async (req, res) => {
   try {
     const predios = await all('SELECT * FROM predio ORDER BY nombre ASC');
-    res.json({ success: true, predios });
+    res.json({ success: true, predios: predios.map(p => ({ ...p, alias: p.alias ? JSON.parse(p.alias) : [] })) });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// 4. Sincronización en lote de Reportes Offline (Offline-First)
+app.post('/api/predios', async (req, res) => {
+  const { id, nombre, superficie_legal_ha, superficie_util_ha, regimen, restricciones } = req.body;
+  if (!id || !nombre) return res.status(400).json({ success: false, error: 'ID y Nombre requeridos' });
+
+  try {
+    const cleanId = id.trim().toLowerCase().replace(/\s+/g, '_');
+    await run(`
+      INSERT INTO predio (id, nombre, alias, superficie_legal_ha, superficie_util_ha, regimen, restricciones)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [
+      cleanId,
+      nombre.trim(),
+      JSON.stringify([nombre.trim()]),
+      Number(superficie_legal_ha) || 0,
+      Number(superficie_util_ha) || Number(superficie_legal_ha) || 0,
+      regimen || 'propio',
+      restricciones || ''
+    ]);
+
+    res.json({ success: true, message: 'Predio registrado exitosamente' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==========================================
+// 4. REPORTES OFFLINE-FIRST & HISTORIAL
+// ==========================================
+
 app.post('/api/reports/sync', async (req, res) => {
   const { reports } = req.body;
   if (!reports || !Array.isArray(reports) || reports.length === 0) {
@@ -296,7 +470,6 @@ app.post('/api/reports/sync', async (req, res) => {
   });
 });
 
-// 5. Historial de Reportes
 app.get('/api/reportes', async (req, res) => {
   try {
     const reportes = await all(`
@@ -319,7 +492,11 @@ app.get('/api/reportes', async (req, res) => {
   }
 });
 
-// 6. Incidencias
+// ==========================================
+// 5. INCIDENCIAS, MAQUINARIA, ACTIVOS & MATERIALES
+// ==========================================
+
+// Incidencias
 app.get('/api/incidencias', async (req, res) => {
   try {
     const incidencias = await all(`
@@ -390,12 +567,29 @@ app.post('/api/incidencias/:folio/estado', async (req, res) => {
   }
 });
 
-// 7. Maquinaria y Horómetros
+// Maquinaria
 app.get('/api/maquinaria', async (req, res) => {
   try {
     const maquinas = await all('SELECT * FROM maquina ORDER BY id ASC');
-    const lecturas = await all('SELECT * FROM lectura_maquina ORDER BY id DESC LIMIT 20');
+    const lecturas = await all('SELECT l.*, m.nombre as maquina_nombre FROM lectura_maquina l JOIN maquina m ON l.maquina_id = m.id ORDER BY l.id DESC LIMIT 20');
     res.json({ success: true, maquinas, lecturas });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/maquinaria', async (req, res) => {
+  const { id, nombre, tipo, propietaria_id, umbral_servicio_hrs, horometro_actual, operador_habitual } = req.body;
+  if (!id || !nombre) return res.status(400).json({ success: false, error: 'ID y Nombre requeridos' });
+
+  try {
+    const cleanId = id.trim().toLowerCase().replace(/\s+/g, '_');
+    await run(`
+      INSERT INTO maquina (id, nombre, tipo, propietaria_id, umbral_servicio_hrs, horometro_actual, operador_habitual)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [cleanId, nombre.trim(), tipo || 'tractor', propietaria_id || 'Aspromex', Number(umbral_servicio_hrs) || 300, Number(horometro_actual) || 0, operador_habitual || 'General']);
+
+    res.json({ success: true, message: 'Máquina registrada con éxito' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -426,7 +620,7 @@ app.post('/api/lecturas/maquina', async (req, res) => {
   }
 });
 
-// 8. Activos
+// Activos
 app.get('/api/activos', async (req, res) => {
   try {
     const activos = await all('SELECT a.*, p.nombre as predio_nombre FROM activo a JOIN predio p ON a.predio_id = p.id');
@@ -436,7 +630,24 @@ app.get('/api/activos', async (req, res) => {
   }
 });
 
-// 9. Materiales
+app.post('/api/activos', async (req, res) => {
+  const { id, nombre, predio_id, tipo, umbral_dias_sin_lectura } = req.body;
+  if (!id || !nombre || !predio_id) return res.status(400).json({ success: false, error: 'Campos requeridos faltantes' });
+
+  try {
+    const cleanId = id.trim().toLowerCase().replace(/\s+/g, '_');
+    await run(`
+      INSERT INTO activo (id, nombre, predio_id, tipo, umbral_dias_sin_lectura, ultima_lectura_fecha, ultimo_estado)
+      VALUES (?, ?, ?, ?, ?, ?, 'ok')
+    `, [cleanId, nombre.trim(), predio_id, tipo || 'bomba', Number(umbral_dias_sin_lectura) || 30, new Date().toISOString().split('T')[0]]);
+
+    res.json({ success: true, message: 'Activo registrado' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Materiales
 app.get('/api/materiales', async (req, res) => {
   try {
     const materiales = await all(`
@@ -467,57 +678,14 @@ app.post('/api/materiales', async (req, res) => {
   }
 });
 
-// 10. Mediciones Oficiales (Dron / Topografía)
-app.get('/api/mediciones', async (req, res) => {
-  try {
-    const mediciones = await all(`
-      SELECT m.*, o.nombre as obra_nombre, p.nombre as predio_nombre 
-      FROM medicion m 
-      JOIN obra o ON m.obra_id = o.id 
-      JOIN predio p ON m.predio_id = p.id 
-      ORDER BY m.id DESC
-    `);
-    res.json({ success: true, mediciones });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-app.post('/api/mediciones', async (req, res) => {
-  const { obra_id, predio_id, hectareas, fuente, autor_nombre } = req.body;
-  if (!obra_id || !predio_id || !hectareas) return res.status(400).json({ success: false, error: 'Campos incompletos' });
-
-  try {
-    await run(`
-      INSERT INTO medicion (obra_id, predio_id, fecha, hectareas, fuente, autor_nombre)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `, [obra_id, predio_id, new Date().toISOString().split('T')[0], Number(hectareas), fuente || 'dron', autor_nombre || 'Piloto Dron']);
-
-    res.json({ success: true, message: 'Medición oficial registrada' });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// 11. Usuarios y Suscriptores Telegram
-app.get('/api/usuarios', async (req, res) => {
-  try {
-    const usuarios = await all('SELECT * FROM usuario');
-    const subscribers = await all('SELECT * FROM telegram_subscribers');
-    res.json({ success: true, usuarios, subscribers });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// 12. Parser Helper
+// Parser Helper
 app.post('/api/parser/test', (req, res) => {
   const { text, obra_id } = req.body;
   const parsed = parseDailyReport(text, new Date(), obra_id);
   res.json({ success: true, parsed });
 });
 
-// 13. Bot Status & Config
+// Bot Status & Config
 app.get('/api/bot/status', async (req, res) => {
   try {
     const status = getBotStatus();
@@ -557,10 +725,9 @@ app.post('/api/bot/config', async (req, res) => {
   }
 });
 
-// 14. Servir Frontend Estático en Producción (Render)
+// Servir Frontend Estático en Producción (Render)
 const frontendDist = path.join(__dirname, '../frontend/dist');
 if (fs.existsSync(frontendDist)) {
-  console.log('📦 Sirviendo frontend estático desde:', frontendDist);
   app.use(express.static(frontendDist));
   app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api')) return next();
