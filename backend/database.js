@@ -88,7 +88,45 @@ async function initDb() {
     )
   `);
 
-  // 4. Predios
+  // 4. Hitos de Proyecto (Milestones)
+  await run(`
+    CREATE TABLE IF NOT EXISTS hito (
+      id TEXT PRIMARY KEY,
+      proyecto_id TEXT NOT NULL,
+      nombre TEXT NOT NULL,
+      descripcion TEXT,
+      orden INTEGER DEFAULT 1,
+      fecha_meta DATE,
+      superficie_meta_ha REAL DEFAULT 0,
+      estado TEXT DEFAULT 'en_progreso', -- pendiente, en_progreso, completado
+      FOREIGN KEY (proyecto_id) REFERENCES proyecto(id) ON DELETE CASCADE
+    )
+  `);
+
+  // 5. Tareas de Hito
+  await run(`
+    CREATE TABLE IF NOT EXISTS tarea (
+      id TEXT PRIMARY KEY,
+      hito_id TEXT NOT NULL,
+      proyecto_id TEXT NOT NULL,
+      predio_id TEXT,
+      nombre TEXT NOT NULL,
+      descripcion TEXT,
+      actividad_id TEXT,
+      unidad TEXT DEFAULT 'ha',
+      cantidad_meta REAL DEFAULT 0,
+      cantidad_acumulada REAL DEFAULT 0,
+      estado TEXT DEFAULT 'en_progreso', -- pendiente, en_progreso, completada
+      responsable TEXT,
+      fecha_inicio DATE,
+      fecha_fin DATE,
+      FOREIGN KEY (hito_id) REFERENCES hito(id) ON DELETE CASCADE,
+      FOREIGN KEY (proyecto_id) REFERENCES proyecto(id) ON DELETE CASCADE,
+      FOREIGN KEY (predio_id) REFERENCES predio(id) ON DELETE SET NULL
+    )
+  `);
+
+  // 6. Predios
   await run(`
     CREATE TABLE IF NOT EXISTS predio (
       id TEXT PRIMARY KEY,
@@ -102,7 +140,7 @@ async function initDb() {
     )
   `);
 
-  // 5. Obras
+  // 7. Obras
   await run(`
     CREATE TABLE IF NOT EXISTS obra (
       id TEXT PRIMARY KEY,
@@ -119,7 +157,7 @@ async function initDb() {
     )
   `);
 
-  // 6. Relación Obra - Predio (N:M)
+  // 8. Relación Obra - Predio (N:M)
   await run(`
     CREATE TABLE IF NOT EXISTS obra_predio (
       obra_id TEXT NOT NULL,
@@ -130,7 +168,7 @@ async function initDb() {
     )
   `);
 
-  // 7. Catálogo Dinámico de Actividades
+  // 9. Catálogos de Actividades y Roles de Cuadrilla
   await run(`
     CREATE TABLE IF NOT EXISTS actividad_catalogo (
       id TEXT PRIMARY KEY,
@@ -140,7 +178,6 @@ async function initDb() {
     )
   `);
 
-  // 8. Catálogo Dinámico de Roles de Cuadrilla
   await run(`
     CREATE TABLE IF NOT EXISTS rol_cuadrilla_catalogo (
       id TEXT PRIMARY KEY,
@@ -149,11 +186,14 @@ async function initDb() {
     )
   `);
 
-  // 9. Reportes Diarios
+  // 10. Reportes Diarios con Hitos y Tareas
   await run(`
     CREATE TABLE IF NOT EXISTS reporte (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       client_uuid TEXT UNIQUE,
+      proyecto_id TEXT,
+      hito_id TEXT,
+      tarea_id TEXT,
       obra_id TEXT NOT NULL,
       recibido_en TEXT NOT NULL,
       fecha_operativa TEXT NOT NULL,
@@ -171,11 +211,13 @@ async function initDb() {
     )
   `);
 
-  // 10. Líneas de Reporte
+  // 11. Líneas de Reporte
   await run(`
     CREATE TABLE IF NOT EXISTS reporte_linea (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       reporte_id INTEGER NOT NULL,
+      tarea_id TEXT,
+      hito_id TEXT,
       predio_id TEXT NOT NULL,
       actividad_id TEXT NOT NULL,
       texto TEXT,
@@ -189,7 +231,7 @@ async function initDb() {
     )
   `);
 
-  // 11. Cuadrilla del Reporte
+  // 12. Cuadrilla del Reporte
   await run(`
     CREATE TABLE IF NOT EXISTS reporte_cuadrilla (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -200,7 +242,7 @@ async function initDb() {
     )
   `);
 
-  // 12. Maquinaria y Lecturas
+  // 13. Maquinaria y Lecturas
   await run(`
     CREATE TABLE IF NOT EXISTS maquina (
       id TEXT PRIMARY KEY,
@@ -232,7 +274,7 @@ async function initDb() {
     )
   `);
 
-  // 13. Activos Fijos
+  // 14. Activos Fijos
   await run(`
     CREATE TABLE IF NOT EXISTS activo (
       id TEXT PRIMARY KEY,
@@ -258,7 +300,7 @@ async function initDb() {
     )
   `);
 
-  // 14. Incidencias y Eventos
+  // 15. Incidencias y Eventos
   await run(`
     CREATE TABLE IF NOT EXISTS incidencia (
       folio TEXT PRIMARY KEY,
@@ -290,7 +332,7 @@ async function initDb() {
     )
   `);
 
-  // 15. Materiales
+  // 16. Materiales
   await run(`
     CREATE TABLE IF NOT EXISTS material (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -308,7 +350,7 @@ async function initDb() {
     )
   `);
 
-  // 16. Mediciones Oficiales
+  // 17. Mediciones Oficiales
   await run(`
     CREATE TABLE IF NOT EXISTS medicion (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -325,7 +367,7 @@ async function initDb() {
     )
   `);
 
-  // 17. Suscriptores Telegram y Configuración
+  // 18. Suscriptores Telegram y Configuración
   await run(`
     CREATE TABLE IF NOT EXISTS telegram_subscribers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -372,7 +414,59 @@ async function seedInitialData() {
     }
   }
 
-  // 2. Actividades
+  // 2. Catálogos base de Proyectos, Hitos y Tareas
+  const projCount = (await get('SELECT COUNT(*) as c FROM proyecto')).c;
+  if (projCount === 0) {
+    console.log('🌱 Sembrando proyectos con Hitos y Tareas...');
+
+    // Proyecto Maíz 2026
+    await run(`
+      INSERT INTO proyecto (id, nombre, tipo, ciclo, superficie_meta_ha, fase_catalogo, gerente_id, inicio, fin)
+      VALUES 
+        ('PRJ-MAIZ-2026', 'Proyecto Maíz 2026', 'maiz', 'Maíz 2026', 120.0, 'V0_V2', 'Ing. Carlos Gerente de Operaciones', '2026-05-01', '2026-11-30'),
+        ('PRJ-REFOR-2026', 'Reforestación Parque Jabin', 'reforestacion', 'Reforestación 2026', 45.0, 'mantenimiento', 'Karen', '2026-01-01', '2026-12-31')
+    `);
+
+    // Hitos del Proyecto Maíz 2026
+    const hitos = [
+      ['HITO-1-PREP', 'PRJ-MAIZ-2026', 'Hito 1: Preparación de Suelo y Desmonte', 'Despalme, rastreo 1er y 2do paso, nivelación de terreno', 1, '2026-06-15', 120.0, 'completado'],
+      ['HITO-2-SIEMBRA', 'PRJ-MAIZ-2026', 'Hito 2: Siembra y Fertilización Base', 'Carga de fertilizante, siembra mecanizada con tractor Case Puma', 2, '2026-08-30', 120.0, 'en_progreso'],
+      ['HITO-3-FITO', 'PRJ-MAIZ-2026', 'Hito 3: Monitoreo y Control Fitosanitario', 'Fumigación con dron T70P, control de plagas y fertilización foliar', 3, '2026-10-15', 120.0, 'pendiente'],
+      ['HITO-4-COSECHA', 'PRJ-MAIZ-2026', 'Hito 4: Cosecha y Logística de Acarreo', 'Trilla mecanizada, pesaje y acarreo hacia bodega', 4, '2026-11-30', 120.0, 'pendiente']
+    ];
+
+    for (const [id, pId, nom, desc, ord, fMeta, supMeta, est] of hitos) {
+      await run(`
+        INSERT INTO hito (id, proyecto_id, nombre, descripcion, orden, fecha_meta, superficie_meta_ha, estado)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `, [id, pId, nom, desc, ord, fMeta, supMeta, est]);
+    }
+
+    // Tareas dentro de Hito 1 y Hito 2
+    const tareas = [
+      ['TAR-101', 'HITO-1-PREP', 'PRJ-MAIZ-2026', 'santa_teresita', 'Despalme y desenraizado con Bulldozer', 'Preparación de terreno forestal', 'despalme', 'ha', 30.0, 30.0, 'completada', 'Dorantes'],
+      ['TAR-102', 'HITO-1-PREP', 'PRJ-MAIZ-2026', 'guayeme', 'Rastreo 1er y 2do paso con tractor', 'Acondicionamiento de suelo agrícola', 'rastreo_1', 'ha', 37.6, 37.6, 'completada', 'Armando'],
+      ['TAR-103', 'HITO-1-PREP', 'PRJ-MAIZ-2026', 'san_alberto', 'Limpieza y nivelación de terreno', 'Acondicionamiento previo a siembra', 'limpieza', 'ha', 11.0, 11.0, 'completada', 'Abner'],
+
+      ['TAR-201', 'HITO-2-SIEMBRA', 'PRJ-MAIZ-2026', 'los_mangos', 'Siembra mecanizada predio Los Mangos', 'Siembra con tractor Puma 155 y sembradora Case PRO 6', 'siembra', 'ha', 12.4, 8.0, 'en_progreso', 'Armando'],
+      ['TAR-202', 'HITO-2-SIEMBRA', 'PRJ-MAIZ-2026', 'cristina', 'Siembra mecanizada predio Cristina', 'Siembra en lote Cristina', 'siembra', 'ha', 5.5, 5.5, 'completada', 'Abner'],
+      ['TAR-203', 'HITO-2-SIEMBRA', 'PRJ-MAIZ-2026', 'rach', 'Siembra predio Rach', 'Siembra en lote Rach', 'siembra', 'ha', 1.8, 1.8, 'completada', 'Abner'],
+      ['TAR-204', 'HITO-2-SIEMBRA', 'PRJ-MAIZ-2026', 'guayeme', 'Siembra lote principal Guayeme', 'Siembra con tractor de 37.6 ha', 'siembra', 'ha', 37.6, 15.0, 'en_progreso', 'Armando'],
+      ['TAR-205', 'HITO-2-SIEMBRA', 'PRJ-MAIZ-2026', 'san_alberto', 'Carga y aplicación de fertilizante Triple 16', 'Fertilización de fondo', 'fertilizacion', 'ha', 11.0, 11.0, 'completada', 'Abner'],
+
+      ['TAR-301', 'HITO-3-FITO', 'PRJ-MAIZ-2026', 'guayeme', 'Fumigación de gusano cogollero con Dron T70P', 'Aplicación fitosanitaria aérea', 'fumigacion', 'ha', 37.6, 0.0, 'pendiente', 'Piloto Dron'],
+      ['TAR-302', 'HITO-3-FITO', 'PRJ-MAIZ-2026', 'los_mangos', 'Monitoreo de plagas y fertilización foliar', 'Inspección de campo', 'monitoreo', 'ha', 12.4, 0.0, 'pendiente', 'Técnico Agrónomo']
+    ];
+
+    for (const [id, hId, pId, predId, nom, desc, actId, uni, cMeta, cAcum, est, resp] of tareas) {
+      await run(`
+        INSERT INTO tarea (id, hito_id, proyecto_id, predio_id, nombre, descripcion, actividad_id, unidad, cantidad_meta, cantidad_acumulada, estado, responsable)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [id, hId, pId, predId, nom, desc, actId, uni, cMeta, cAcum, est, resp]);
+    }
+  }
+
+  // 3. Actividades
   const actCount = (await get('SELECT COUNT(*) as c FROM actividad_catalogo')).c;
   if (actCount === 0) {
     const actividades = [
@@ -400,7 +494,7 @@ async function seedInitialData() {
     }
   }
 
-  // 3. Roles de Cuadrilla
+  // 4. Roles de Cuadrilla
   const rolCuadCount = (await get('SELECT COUNT(*) as c FROM rol_cuadrilla_catalogo')).c;
   if (rolCuadCount === 0) {
     const roles = [
@@ -417,7 +511,7 @@ async function seedInitialData() {
     }
   }
 
-  // 4. Catálogos base
+  // 5. Entidades y Predios
   const entidadCount = (await get('SELECT COUNT(*) as c FROM entidad')).c;
   if (entidadCount === 0) {
     const entidades = [
@@ -432,14 +526,6 @@ async function seedInitialData() {
     for (const [id, nombre, odooId] of entidades) {
       await run('INSERT INTO entidad (id, nombre, odoo_company_id) VALUES (?, ?, ?)', [id, nombre, odooId]);
     }
-
-    await run(`
-      INSERT INTO proyecto (id, nombre, tipo, ciclo, superficie_meta_ha, fase_catalogo, gerente_id, inicio, fin)
-      VALUES 
-        ('PRJ-MAIZ-2026', 'Proyecto Maíz 2026', 'maiz', 'Maíz 2026', 120.0, 'V0_V2', 'Ing. Carlos Supervisor', '2026-05-01', '2026-11-30'),
-        ('PRJ-REFOR-2026', 'Reforestación Parque Jabin', 'reforestacion', 'Reforestación 2026', 45.0, 'mantenimiento', 'Karen', '2026-01-01', '2026-12-31'),
-        ('PRJ-INFRA-2026', 'Infraestructura y Cercado Ganadero', 'infraestructura', 'Infraestructura 2026', 30.0, 'cercado y corral', 'Karen', '2026-03-01', '2026-10-31')
-    `);
 
     const predios = [
       ['san_alberto', 'San Alberto', JSON.stringify(['Predio San Alberto', 'Cabaña-Cultivo']), 11.04, 11.04, 'propio', ''],
@@ -530,7 +616,7 @@ async function seedInitialData() {
       VALUES ('sta_teresita', 'santa_teresita', '2026-07-14', 12.3, 'dron', 'Abner (DJI T70P)')
     `);
 
-    console.log('✅ Base de datos AGROK y catálogos inicializados.');
+    console.log('✅ Base de datos AGROK y proyectos estructurados con Hitos y Tareas.');
   }
 }
 

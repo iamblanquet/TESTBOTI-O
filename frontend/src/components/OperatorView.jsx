@@ -17,7 +17,9 @@ import {
   Plus,
   Trash2,
   Sparkles,
-  CloudRain
+  CloudRain,
+  FolderPlus,
+  CheckSquare
 } from 'lucide-react';
 import {
   queueAgrokOfflineReport,
@@ -26,7 +28,7 @@ import {
   formatLocalTimestamp,
   formatYMD
 } from '../services/storage';
-import { testParserApi, saveHorometroApi } from '../services/api';
+import { testParserApi, fetchProyectosEstructura } from '../services/api';
 
 const ACTIVIDADES_CATALOG = [
   'siembra',
@@ -72,7 +74,13 @@ export default function OperatorView({
   isSyncing,
   tgUser
 }) {
-  const [tabMode, setTabMode] = useState('form'); // 'form' | 'paste' | 'horometro'
+  const [tabMode, setTabMode] = useState('form'); // 'form' | 'paste'
+
+  // Proyectos -> Hitos -> Tareas
+  const [proyectosEstructura, setProyectosEstructura] = useState([]);
+  const [selectedProjectId, setSelectedProjectId] = useState('');
+  const [selectedHitoId, setSelectedHitoId] = useState('');
+  const [selectedTareaId, setSelectedTareaId] = useState('');
 
   // Form State
   const defaultName = tgUser
@@ -103,12 +111,6 @@ export default function OperatorView({
   const [pastedText, setPastedText] = useState('');
   const [isParsing, setIsParsing] = useState(false);
 
-  // Horómetro Modal / Express Input
-  const [selectedMaquina, setSelectedMaquina] = useState('puma');
-  const [hInicio, setHInicio] = useState('');
-  const [hFin, setHFin] = useState('');
-  const [litrosDiesel, setLitrosDiesel] = useState('60');
-
   useEffect(() => {
     const timer = setInterval(() => setCurrentLiveTime(formatLocalTimestamp()), 1000);
     return () => clearInterval(timer);
@@ -121,7 +123,85 @@ export default function OperatorView({
     }
   }, [tgUser]);
 
-  // Obtener obra seleccionada y sus predios asociados
+  // Cargar estructura jerárquica de proyectos, hitos y tareas
+  const loadEstructura = async () => {
+    try {
+      const res = await fetchProyectosEstructura();
+      if (res.proyectos && res.proyectos.length > 0) {
+        setProyectosEstructura(res.proyectos);
+        if (!selectedProjectId) {
+          const firstProj = res.proyectos[0];
+          setSelectedProjectId(firstProj.id);
+          if (firstProj.hitos && firstProj.hitos.length > 0) {
+            const firstHito = firstProj.hitos[0];
+            setSelectedHitoId(firstHito.id);
+            if (firstHito.tareas && firstHito.tareas.length > 0) {
+              setSelectedTareaId(firstHito.tareas[0].id);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  useEffect(() => {
+    loadEstructura();
+  }, []);
+
+  // Cascading updates
+  const currentProject = proyectosEstructura.find(p => p.id === selectedProjectId) || proyectosEstructura[0] || null;
+  const availableHitos = currentProject?.hitos || [];
+  const currentHito = availableHitos.find(h => h.id === selectedHitoId) || availableHitos[0] || null;
+  const availableTareas = currentHito?.tareas || [];
+  const currentTarea = availableTareas.find(t => t.id === selectedTareaId) || availableTareas[0] || null;
+
+  // Cuando cambia la tarea, actualizar predio y actividad por defecto
+  const handleTareaChange = (tId) => {
+    setSelectedTareaId(tId);
+    const tar = availableTareas.find(t => t.id === tId);
+    if (tar) {
+      if (tar.predio_id) {
+        setAvances([{
+          predio_id: tar.predio_id,
+          actividad_id: tar.actividad_id || 'siembra',
+          cantidad: 1.0,
+          unidad: tar.unidad || 'ha',
+          tarea_id: tar.id,
+          hito_id: tar.hito_id
+        }]);
+      }
+    }
+  };
+
+  const handleHitoChange = (hId) => {
+    setSelectedHitoId(hId);
+    const h = availableHitos.find(item => item.id === hId);
+    if (h && h.tareas && h.tareas.length > 0) {
+      handleTareaChange(h.tareas[0].id);
+    } else {
+      setSelectedTareaId('');
+    }
+  };
+
+  const handleProjectChange = (pId) => {
+    setSelectedProjectId(pId);
+    const p = proyectosEstructura.find(item => item.id === pId);
+    if (p && p.hitos && p.hitos.length > 0) {
+      setSelectedHitoId(p.hitos[0].id);
+      if (p.hitos[0].tareas && p.hitos[0].tareas.length > 0) {
+        handleTareaChange(p.hitos[0].tareas[0].id);
+      } else {
+        setSelectedTareaId('');
+      }
+    } else {
+      setSelectedHitoId('');
+      setSelectedTareaId('');
+    }
+  };
+
+  // Obra y predios
   const selectedObra = obras.find(o => o.id === selectedObraId) || obras[0] || { id: 'guayeme', nombre: 'Guayeme', predios: [] };
   const availablePredios = selectedObra.predios && selectedObra.predios.length > 0
     ? selectedObra.predios
@@ -145,7 +225,14 @@ export default function OperatorView({
   // Avances handlers
   const handleAddAvance = () => {
     const defaultPred = availablePredios[0] ? availablePredios[0].id : 'guayeme';
-    setAvances([...avances, { predio_id: defaultPred, actividad_id: 'siembra', cantidad: 1.0, unidad: 'ha' }]);
+    setAvances([...avances, {
+      predio_id: defaultPred,
+      actividad_id: currentTarea?.actividad_id || 'siembra',
+      cantidad: 1.0,
+      unidad: 'ha',
+      tarea_id: currentTarea?.id || null,
+      hito_id: currentHito?.id || null
+    }]);
   };
 
   const handleRemoveAvance = (index) => {
@@ -168,6 +255,12 @@ export default function OperatorView({
     }
 
     const queued = queueAgrokOfflineReport({
+      proyecto_id: currentProject?.id || 'PRJ-MAIZ-2026',
+      proyecto_nombre: currentProject?.nombre || 'Proyecto Maíz 2026',
+      hito_id: currentHito?.id || null,
+      hito_nombre: currentHito?.nombre || '',
+      tarea_id: currentTarea?.id || null,
+      tarea_nombre: currentTarea?.nombre || '',
       obra_id: selectedObra.id,
       obra_nombre: selectedObra.nombre,
       fecha_operativa: formatYMD(new Date()),
@@ -177,10 +270,12 @@ export default function OperatorView({
       cuadrilla: isSinActividad ? [] : cuadrilla,
       avances: isSinActividad ? [] : avances.map(a => ({
         ...a,
+        tarea_id: currentTarea?.id || null,
+        hito_id: currentHito?.id || null,
         cantidad_ha: a.unidad === 'ha' ? a.cantidad : (a.unidad === 'm2' ? a.cantidad / 10000 : null)
       })),
       notas: notas.trim(),
-      texto_original: `Reporte AGROK ${selectedObra.nombre} (${formatYMD(new Date())})`
+      texto_original: `Reporte AGROK ${currentProject?.nombre || ''} - ${currentTarea?.nombre || selectedObra.nombre} (${formatYMD(new Date())})`
     });
 
     saveOperatorName(autorNombre);
@@ -188,7 +283,7 @@ export default function OperatorView({
     setNotification({
       title: isSinActividad ? '¡Día Sin Actividad Guardado (Offline)!' : '¡Reporte AGROK Guardado (Offline)!',
       time: queued.offline_created_at,
-      msg: `Obra: ${selectedObra.nombre} · Registrado con marca inmutable de campo.`
+      msg: `Tarea: ${currentTarea?.nombre || selectedObra.nombre} · Registrado con marca inmutable.`
     });
 
     setNotas('');
@@ -207,6 +302,12 @@ export default function OperatorView({
       const parsed = res.parsed;
 
       const queued = queueAgrokOfflineReport({
+        proyecto_id: currentProject?.id || 'PRJ-MAIZ-2026',
+        proyecto_nombre: currentProject?.nombre || 'Proyecto Maíz 2026',
+        hito_id: currentHito?.id || null,
+        hito_nombre: currentHito?.nombre || '',
+        tarea_id: currentTarea?.id || null,
+        tarea_nombre: currentTarea?.nombre || '',
         obra_id: parsed.obra_id || selectedObraId,
         obra_nombre: selectedObra.nombre,
         fecha_operativa: parsed.fecha_operativa || formatYMD(new Date()),
@@ -220,7 +321,7 @@ export default function OperatorView({
       setNotification({
         title: '¡Reporte Parseado y Guardado (Offline)!',
         time: queued.offline_created_at,
-        msg: `Se extrajeron ${parsed.cuadrilla.length} roles de cuadrilla y ${parsed.avances.length} avances de predio.`
+        msg: `Se extrajeron ${parsed.cuadrilla.length} roles y ${parsed.avances.length} avances de predio.`
       });
 
       setPastedText('');
@@ -295,7 +396,7 @@ export default function OperatorView({
         </div>
       </div>
 
-      {/* Tabs: Formulario Táctil vs Pegar Bloque del 11 de Mayo */}
+      {/* Tabs: Formulario Táctil vs Pegar Texto */}
       <div className="flex bg-slate-200 p-1 rounded-2xl gap-1">
         <button
           type="button"
@@ -304,7 +405,7 @@ export default function OperatorView({
             tabMode === 'form' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
           }`}
         >
-          📝 Captura Guiada
+          📝 Captura Guiada (Hitos & Tareas)
         </button>
         <button
           type="button"
@@ -313,7 +414,7 @@ export default function OperatorView({
             tabMode === 'paste' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
           }`}
         >
-          <Sparkles className="w-3.5 h-3.5 text-amber-500" /> Pegar Texto Diario
+          <Sparkles className="w-3.5 h-3.5 text-amber-500" /> Pegar Texto
         </button>
       </div>
 
@@ -331,7 +432,7 @@ export default function OperatorView({
         </div>
       )}
 
-      {/* MODO 1: Formulario Guiado AGROK */}
+      {/* MODO 1: Formulario Guiado con Proyecto -> Hito -> Tarea */}
       {tabMode === 'form' && (
         <form onSubmit={handleSubmitForm} className="bg-white rounded-3xl p-4 shadow-md border border-slate-200 space-y-3.5 text-xs">
           {/* Header */}
@@ -339,9 +440,9 @@ export default function OperatorView({
             <div>
               <h2 className="font-extrabold text-sm text-slate-900 flex items-center gap-1.5">
                 <FileText className="w-4 h-4 text-emerald-600" />
-                Reporte Diario de Obra
+                Reporte Diario por Tarea
               </h2>
-              <p className="text-[10px] text-slate-400">Guarda en local sin requerir internet</p>
+              <p className="text-[10px] text-slate-400">Guarda en local sin requerir señal de internet</p>
             </div>
             <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 uppercase">
               AGROK Campo
@@ -370,10 +471,76 @@ export default function OperatorView({
             />
           </div>
 
-          {/* Obra Selector */}
+          {/* SELECCIÓN JERÁRQUICA: PROYECTO -> HITO -> TAREA */}
+          <div className="p-3 bg-emerald-50/50 rounded-2xl border border-emerald-200/80 space-y-2.5">
+            <span className="text-[10px] font-extrabold text-emerald-900 uppercase flex items-center gap-1">
+              <FolderPlus className="w-3.5 h-3.5 text-emerald-600" /> 1. Proyecto, Hito y Tarea Asignada
+            </span>
+
+            {/* 1. Proyecto */}
+            <div>
+              <label className="block text-[9px] font-bold uppercase text-slate-500 mb-0.5">Proyecto:</label>
+              <select
+                value={selectedProjectId}
+                onChange={(e) => handleProjectChange(e.target.value)}
+                className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-xl font-bold text-slate-900"
+              >
+                {proyectosEstructura.map(p => (
+                  <option key={p.id} value={p.id}>{p.nombre} ({p.ciclo})</option>
+                ))}
+              </select>
+            </div>
+
+            {/* 2. Hito */}
+            <div>
+              <label className="block text-[9px] font-bold uppercase text-slate-500 mb-0.5">Hito / Fase:</label>
+              <select
+                value={selectedHitoId}
+                onChange={(e) => handleHitoChange(e.target.value)}
+                className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-xl font-semibold text-slate-800 text-[11px]"
+              >
+                {availableHitos.map(h => (
+                  <option key={h.id} value={h.id}>{h.nombre}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* 3. Tarea */}
+            <div>
+              <label className="block text-[9px] font-bold uppercase text-slate-500 mb-0.5">Tarea en la que trabajas hoy:</label>
+              <select
+                value={selectedTareaId}
+                onChange={(e) => handleTareaChange(e.target.value)}
+                className="w-full px-2.5 py-1.5 bg-white border-2 border-emerald-500 rounded-xl font-bold text-emerald-950 text-[11px]"
+              >
+                {availableTareas.map(t => (
+                  <option key={t.id} value={t.id}>
+                    🎯 {t.nombre} ({t.cantidad_acumulada}/{t.cantidad_meta} {t.unidad})
+                  </option>
+                ))}
+              </select>
+
+              {/* Progress bar de la tarea seleccionada */}
+              {currentTarea && (
+                <div className="mt-2 bg-white p-2 rounded-xl border border-emerald-200 flex items-center justify-between text-[10px]">
+                  <div>
+                    <span className="text-slate-500 font-medium">Meta: {currentTarea.cantidad_meta} {currentTarea.unidad}</span>
+                    <span className="font-bold text-emerald-800 ml-2">Acumulado: {currentTarea.cantidad_acumulada} {currentTarea.unidad}</span>
+                  </div>
+                  <span className={`px-2 py-0.5 rounded-full font-bold uppercase text-[9px] ${
+                    currentTarea.estado === 'completada' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                  }`}>
+                    {currentTarea.estado}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Obra de Campo */}
           <div>
             <label className="font-bold text-slate-700 uppercase tracking-wider text-[10px] block mb-1 flex items-center gap-1">
-              <Layers className="w-3 h-3 text-slate-500" /> Obra Activa
+              <Layers className="w-3 h-3 text-slate-500" /> Obra / Frente
             </label>
             <select
               value={selectedObraId}
@@ -386,18 +553,6 @@ export default function OperatorView({
                 </option>
               ))}
             </select>
-
-            {/* Predios chips */}
-            {availablePredios.length > 0 && (
-              <div className="mt-1.5 flex flex-wrap gap-1">
-                <span className="text-[9px] text-slate-400 font-bold uppercase mr-1">Predios:</span>
-                {availablePredios.map((p) => (
-                  <span key={p.id} className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md text-[10px] font-semibold">
-                    📍 {p.nombre}
-                  </span>
-                ))}
-              </div>
-            )}
           </div>
 
           {/* Toggle: Sin Actividad */}
@@ -483,11 +638,11 @@ export default function OperatorView({
                 </div>
               </div>
 
-              {/* Sección Avances y Actividades por Predio */}
+              {/* Sección Avance en Tarea / Predio */}
               <div className="space-y-2 pt-1 border-t border-slate-100">
                 <div className="flex items-center justify-between">
                   <label className="font-bold text-slate-700 uppercase tracking-wider text-[10px] flex items-center gap-1">
-                    <MapPin className="w-3 h-3 text-slate-500" /> Avance por Predio y Actividad
+                    <MapPin className="w-3 h-3 text-slate-500" /> Avance de Hoy en la Tarea
                   </label>
                   <button
                     type="button"
@@ -583,12 +738,12 @@ export default function OperatorView({
             className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-xs rounded-2xl shadow-lg shadow-emerald-600/30 transition flex items-center justify-center gap-1.5"
           >
             <HardDrive className="w-4 h-4" />
-            GUARDAR REPORTE AGROK (OFFLINE)
+            GUARDAR REPORTE DE TAREA (OFFLINE)
           </button>
         </form>
       )}
 
-      {/* MODO 2: Pegar Texto Diario y Parsear con el Motor AGROK */}
+      {/* MODO 2: Pegar Texto Diario */}
       {tabMode === 'paste' && (
         <form onSubmit={handleParseAndSubmit} className="bg-white rounded-3xl p-4 shadow-md border border-slate-200 space-y-3 text-xs">
           <div>
@@ -603,7 +758,7 @@ export default function OperatorView({
 
           <div>
             <label className="font-bold text-slate-700 uppercase tracking-wider text-[10px] block mb-1">
-              Seleccionar Obra (o incluir cabecera *Obra:*):
+              Seleccionar Obra:
             </label>
             <select
               value={selectedObraId}

@@ -3,6 +3,7 @@
 const STORAGE_KEYS = {
   OBRAS: 'agrok_offline_obras_cache',
   PREDIOS: 'agrok_offline_predios_cache',
+  PROYECTOS_ESTRUCTURA: 'agrok_offline_proyectos_estructura',
   REPORTS_QUEUE: 'agrok_offline_reports_queue',
   OPERATOR_NAME: 'agrok_offline_operator_name',
   LAST_SYNC: 'agrok_offline_last_sync_time',
@@ -25,16 +26,19 @@ export function formatYMD(date = new Date()) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-// 1. OBRAS Y PREDIOS LOCALES
-export function saveObrasLocally(obras, predios = []) {
+// 1. OBRAS, PREDIOS Y ESTRUCTURA DE PROYECTOS / HITOS / TAREAS
+export function saveObrasLocally(obras, predios = [], estructura = []) {
   try {
     localStorage.setItem(STORAGE_KEYS.OBRAS, JSON.stringify(obras));
     if (predios.length > 0) {
       localStorage.setItem(STORAGE_KEYS.PREDIOS, JSON.stringify(predios));
     }
+    if (estructura.length > 0) {
+      localStorage.setItem(STORAGE_KEYS.PROYECTOS_ESTRUCTURA, JSON.stringify(estructura));
+    }
     return true;
   } catch (e) {
-    console.error('Error guardando obras locales:', e);
+    console.error('Error guardando cache local:', e);
     return false;
   }
 }
@@ -57,8 +61,29 @@ export function getLocalPredios() {
   }
 }
 
-// 2. COLA DE REPORTES OFFLINE AGROK
+export function getLocalProyectosEstructura() {
+  try {
+    const data = localStorage.getItem(STORAGE_KEYS.PROYECTOS_ESTRUCTURA);
+    return data ? JSON.parse(data) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+export function saveProyectosEstructuraLocally(estructura) {
+  try {
+    localStorage.setItem(STORAGE_KEYS.PROYECTOS_ESTRUCTURA, JSON.stringify(estructura));
+  } catch (e) {}
+}
+
+// 2. COLA DE REPORTES OFFLINE AGROK (Con Proyecto, Hito y Tarea)
 export function queueAgrokOfflineReport({
+  proyecto_id,
+  proyecto_nombre,
+  hito_id,
+  hito_nombre,
+  tarea_id,
+  tarea_nombre,
   obra_id,
   obra_nombre,
   fecha_operativa,
@@ -75,6 +100,12 @@ export function queueAgrokOfflineReport({
   
   const newReport = {
     client_uuid: generateUUID(),
+    proyecto_id: proyecto_id || 'PRJ-MAIZ-2026',
+    proyecto_nombre: proyecto_nombre || 'Proyecto Maíz 2026',
+    hito_id: hito_id || null,
+    hito_nombre: hito_nombre || '',
+    tarea_id: tarea_id || null,
+    tarea_nombre: tarea_nombre || '',
     obra_id: obra_id || 'guayeme',
     obra_nombre: obra_nombre || 'Obra AGROK',
     fecha_operativa: fecha_operativa || formatYMD(now),

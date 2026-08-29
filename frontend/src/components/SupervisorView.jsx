@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   AlertTriangle,
   Layers,
@@ -12,9 +12,12 @@ import {
   X,
   RefreshCw,
   Plus,
-  Compass
+  Compass,
+  FolderPlus,
+  Target,
+  CheckSquare
 } from 'lucide-react';
-import { updateIncidenciaEstadoApi, createIncidenciaApi } from '../services/api';
+import { updateIncidenciaEstadoApi, createIncidenciaApi, fetchProyectosEstructura, createHitoApi, createTareaApi } from '../services/api';
 
 export default function SupervisorView({
   tableroData,
@@ -30,6 +33,83 @@ export default function SupervisorView({
   const [newIncTipo, setNewIncTipo] = useState('falla_mecanica');
   const [newIncObra, setNewIncObra] = useState('guayeme');
   const [newIncDesc, setNewIncDesc] = useState('');
+
+  // Hitos & Tareas State
+  const [proyectosEstructura, setProyectosEstructura] = useState([]);
+  const [isNewHitoOpen, setIsNewHitoOpen] = useState(false);
+  const [isNewTareaOpen, setIsNewTareaOpen] = useState(false);
+
+  // Form Hito
+  const [hProjId, setHProjId] = useState('');
+  const [hNombre, setHNombre] = useState('');
+  const [hMetaHa, setHMetaHa] = useState('120');
+
+  // Form Tarea
+  const [tHitoId, setTHitoId] = useState('');
+  const [tNombre, setTNombre] = useState('');
+  const [tPredioId, setTPredioId] = useState('guayeme');
+  const [tActividad, setTActividad] = useState('siembra');
+  const [tMeta, setTMeta] = useState('10');
+  const [tUnidad, setTUnidad] = useState('ha');
+  const [tResp, setTResp] = useState('');
+
+  const loadHitosTareas = async () => {
+    try {
+      const res = await fetchProyectosEstructura();
+      if (res.success && res.proyectos) {
+        setProyectosEstructura(res.proyectos);
+        if (!hProjId && res.proyectos.length > 0) {
+          setHProjId(res.proyectos[0].id);
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  useEffect(() => {
+    loadHitosTareas();
+  }, []);
+
+  const handleCreateHito = async (e) => {
+    e.preventDefault();
+    if (!hNombre.trim()) return;
+
+    try {
+      await createHitoApi({
+        proyecto_id: hProjId || 'PRJ-MAIZ-2026',
+        nombre: hNombre.trim(),
+        superficie_meta_ha: parseFloat(hMetaHa) || 0
+      });
+      setIsNewHitoOpen(false);
+      setHNombre('');
+      loadHitosTareas();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleCreateTarea = async (e) => {
+    e.preventDefault();
+    if (!tNombre.trim() || !tHitoId) return;
+
+    try {
+      await createTareaApi({
+        hito_id: tHitoId,
+        nombre: tNombre.trim(),
+        predio_id: tPredioId,
+        actividad_id: tActividad,
+        unidad: tUnidad,
+        cantidad_meta: parseFloat(tMeta) || 0,
+        responsable: tResp || 'Operador'
+      });
+      setIsNewTareaOpen(false);
+      setTNombre('');
+      loadHitosTareas();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
 
   const widgets = tableroData?.widgets || {
     sin_reporte: [],
@@ -91,21 +171,122 @@ export default function SupervisorView({
         <div>
           <div className="flex items-center gap-2 mb-1">
             <Compass className="w-6 h-6 text-emerald-300" />
-            <h2 className="text-xl font-extrabold">Tablero Operativo AGROK</h2>
+            <h2 className="text-xl font-extrabold">Tablero Operativo & Gestión de Proyectos</h2>
           </div>
           <p className="text-xs text-emerald-200">
-            Los 4 widgets canónicos (Obras sin reporte, Avance contra meta, Incidencias y Materiales).
+            Control de Hitos, Tareas y los 4 widgets canónicos (Obras sin reporte, Avance, Incidencias y Materiales).
           </p>
         </div>
 
         <div className="flex items-center gap-2">
           <button
-            onClick={onRefreshData}
+            onClick={() => { onRefreshData(); loadHitosTareas(); }}
             className="p-2.5 bg-white/10 hover:bg-white/20 text-white rounded-2xl transition"
             title="Refrescar datos"
           >
             <RefreshCw className="w-4 h-4" />
           </button>
+        </div>
+      </div>
+
+      {/* SECCIÓN GERENCIAL: HITOS Y TAREAS DEL PROYECTO */}
+      <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-200 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
+          <div>
+            <h3 className="font-extrabold text-sm text-slate-900 flex items-center gap-1.5">
+              <Target className="w-4 h-4 text-emerald-600" />
+              Estructura Operativa: Hitos y Tareas del Proyecto
+            </h3>
+            <p className="text-[10px] text-slate-400">Los operadores eligen su hito y tarea al enviar su reporte diario.</p>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setIsNewHitoOpen(true)}
+              className="px-2.5 py-1 bg-emerald-100 hover:bg-emerald-200 text-emerald-900 font-bold text-[10px] rounded-xl flex items-center gap-1 transition"
+            >
+              <Plus className="w-3 h-3" /> Nuevo Hito
+            </button>
+            <button
+              onClick={() => {
+                if (proyectosEstructura[0]?.hitos?.[0]) {
+                  setTHitoId(proyectosEstructura[0].hitos[0].id);
+                }
+                setIsNewTareaOpen(true);
+              }}
+              className="px-2.5 py-1 bg-teal-600 hover:bg-teal-700 text-white font-bold text-[10px] rounded-xl flex items-center gap-1 transition shadow-sm"
+            >
+              <Plus className="w-3 h-3" /> Nueva Tarea
+            </button>
+          </div>
+        </div>
+
+        {/* Listado de Proyectos con sus Hitos y Tareas */}
+        <div className="space-y-3">
+          {proyectosEstructura.map((proj) => (
+            <div key={proj.id} className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="font-extrabold text-xs text-slate-900">{proj.nombre}</h4>
+                  <span className="text-[10px] text-slate-500 font-medium">Ciclo: {proj.ciclo} · Gerente: {proj.gerente_id}</span>
+                </div>
+                <div className="text-right">
+                  <span className="font-mono font-black text-xs text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-md">
+                    {proj.porcentaje_global}% Global
+                  </span>
+                </div>
+              </div>
+
+              {/* Hitos */}
+              <div className="space-y-2">
+                {proj.hitos?.map((h) => (
+                  <div key={h.id} className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-xs text-slate-800">🏁 {h.nombre}</span>
+                        <span className="text-[9px] px-2 py-0.2 rounded-full font-bold uppercase bg-slate-100 text-slate-600">
+                          {h.estado}
+                        </span>
+                      </div>
+                      <span className="font-mono text-[10px] font-extrabold text-emerald-700">
+                        {h.total_acumulada} / {h.total_meta} ha ({h.porcentaje}%)
+                      </span>
+                    </div>
+
+                    {/* Barra de progreso del Hito */}
+                    <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-emerald-500 rounded-full transition-all duration-500"
+                        style={{ width: `${Math.min(100, h.porcentaje)}%` }}
+                      />
+                    </div>
+
+                    {/* Tareas del Hito */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1">
+                      {h.tareas?.map((t) => (
+                        <div key={t.id} className="p-2 bg-slate-50 rounded-lg border border-slate-150 flex items-center justify-between text-[10px]">
+                          <div>
+                            <span className="font-bold text-slate-800 block">🎯 {t.nombre}</span>
+                            <span className="text-slate-500">📍 {t.predio_nombre || 'Predio asignado'} · Resp: {t.responsable}</span>
+                          </div>
+                          <div className="text-right">
+                            <span className="font-bold text-emerald-800 block">
+                              {t.cantidad_acumulada}/{t.cantidad_meta} {t.unidad}
+                            </span>
+                            <span className={`px-1.5 py-0.2 rounded text-[8px] font-extrabold uppercase ${
+                              t.estado === 'completada' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                            }`}>
+                              {t.estado}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
 
@@ -279,42 +460,168 @@ export default function SupervisorView({
             </div>
           )}
         </div>
+      </div>
 
-        {/* WIDGET EXTRA: Maquinaria y Horómetros */}
-        <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-200 space-y-3 md:col-span-2">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-            <h3 className="font-extrabold text-sm text-slate-900 flex items-center gap-1.5">
-              <Tractor className="w-4 h-4 text-amber-600" />
-              Maquinaria & Horómetros (Umbral 300 hrs)
+      {/* MODAL: NUEVO HITO */}
+      {isNewHitoOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+          <div className="bg-white w-full max-w-md rounded-3xl p-5 shadow-2xl border border-slate-200 space-y-3.5">
+            <h3 className="font-extrabold text-sm text-slate-900 flex items-center gap-2">
+              <Target className="w-5 h-5 text-emerald-600" />
+              Nuevo Hito / Fase de Proyecto
             </h3>
-          </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-            {maquinaria.map((maq) => {
-              const umbral = maq.umbral_servicio_hrs || 300;
-              const faltaServicio = Math.max(0, Math.round((umbral - (maq.horometro_actual % umbral)) * 10) / 10);
-              const isAlerta = faltaServicio <= 20;
+            <form onSubmit={handleCreateHito} className="space-y-3">
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-slate-700 mb-1">Proyecto:</label>
+                <select
+                  value={hProjId}
+                  onChange={(e) => setHProjId(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl font-bold"
+                >
+                  {proyectosEstructura.map(p => (
+                    <option key={p.id} value={p.id}>{p.nombre}</option>
+                  ))}
+                </select>
+              </div>
 
-              return (
-                <div key={maq.id} className={`p-3 rounded-2xl border ${
-                  isAlerta ? 'bg-amber-50 border-amber-300' : 'bg-slate-50 border-slate-200'
-                }`}>
-                  <span className="font-bold text-xs block text-slate-800">{maq.nombre}</span>
-                  <p className="text-[10px] text-slate-500 mt-0.5">Operador: {maq.operador_habitual || 'General'}</p>
-                  <div className="mt-2 flex items-center justify-between text-[11px]">
-                    <span className="font-mono font-extrabold text-slate-900">{maq.horometro_actual} h</span>
-                    <span className={`font-bold px-2 py-0.5 rounded-md text-[10px] ${
-                      isAlerta ? 'bg-amber-200 text-amber-900 font-black animate-pulse' : 'bg-emerald-100 text-emerald-800'
-                    }`}>
-                      {faltaServicio} h a servicio
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-slate-700 mb-1">Nombre del Hito:</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="ej: Hito 3: Control Fitosanitario y Riego"
+                  value={hNombre}
+                  onChange={(e) => setHNombre(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-slate-700 mb-1">Superficie Meta (ha):</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={hMetaHa}
+                  onChange={(e) => setHMetaHa(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl font-bold text-emerald-800"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setIsNewHitoOpen(false)}
+                  className="flex-1 py-2 bg-slate-200 text-slate-700 font-bold rounded-xl text-xs"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl text-xs shadow-md"
+                >
+                  Guardar Hito
+                </button>
+              </div>
+            </form>
           </div>
         </div>
-      </div>
+      )}
+
+      {/* MODAL: NUEVA TAREA */}
+      {isNewTareaOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+          <div className="bg-white w-full max-w-md rounded-3xl p-5 shadow-2xl border border-slate-200 space-y-3.5">
+            <h3 className="font-extrabold text-sm text-slate-900 flex items-center gap-2">
+              <CheckSquare className="w-5 h-5 text-teal-600" />
+              Nueva Tarea Operativa
+            </h3>
+
+            <form onSubmit={handleCreateTarea} className="space-y-3">
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-slate-700 mb-1">Hito Padre:</label>
+                <select
+                  value={tHitoId}
+                  onChange={(e) => setTHitoId(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl font-bold"
+                >
+                  {proyectosEstructura.flatMap(p => p.hitos || []).map(h => (
+                    <option key={h.id} value={h.id}>🏁 {h.nombre}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-slate-700 mb-1">Nombre de la Tarea:</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="ej: Siembra mecanizada lote 1"
+                  value={tNombre}
+                  onChange={(e) => setTNombre(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl font-bold"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-slate-700 mb-1">Predio:</label>
+                  <select
+                    value={tPredioId}
+                    onChange={(e) => setTPredioId(e.target.value)}
+                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl"
+                  >
+                    <option value="guayeme">Guayeme</option>
+                    <option value="santa_teresita">Santa Teresita</option>
+                    <option value="los_mangos">Los Mangos</option>
+                    <option value="san_alberto">San Alberto</option>
+                    <option value="san_luis">San Luis</option>
+                    <option value="rach">Rach</option>
+                    <option value="cristina">Cristina</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-slate-700 mb-1">Cantidad Meta (ha):</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={tMeta}
+                    onChange={(e) => setTMeta(e.target.value)}
+                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl font-bold text-emerald-800"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-slate-700 mb-1">Operador / Responsable Asignado:</label>
+                <input
+                  type="text"
+                  placeholder="ej: Armando / Abner"
+                  value={tResp}
+                  onChange={(e) => setTResp(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setIsNewTareaOpen(false)}
+                  className="flex-1 py-2 bg-slate-200 text-slate-700 font-bold rounded-xl text-xs"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2 bg-teal-600 hover:bg-teal-700 text-white font-extrabold rounded-xl text-xs shadow-md"
+                >
+                  Guardar Tarea
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Modal: Cerrar Incidencia con Causa Raíz Obligatoria */}
       {closingFolio && (

@@ -14,7 +14,7 @@ app.use(cors());
 app.use(express.json());
 
 // ==========================================
-// 1. AUTENTICACIÓN & GESTIÓN DE USUARIOS Y ROLES
+// 1. AUTENTICACIÓN & USUARIOS
 // ==========================================
 
 app.post('/api/auth/login', async (req, res) => {
@@ -69,7 +69,6 @@ app.post('/api/usuarios', async (req, res) => {
     const userId = `usr-${Date.now().toString(36)}`;
     const pHash = hashPassword(password);
 
-    // Asignar funciones por defecto según el rol si no se especifican
     let crearProj = puede_crear_proyectos ? 1 : 0;
     let cerrarInc = puede_cerrar_incidencias ? 1 : 0;
     let gestMat = puede_gestionar_materiales ? 1 : 0;
@@ -149,35 +148,61 @@ app.put('/api/usuarios/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/usuarios/:id', async (req, res) => {
-  const { id } = req.params;
+// ==========================================
+// 2. ESTRUCTURA COMPLETA: PROYECTOS -> HITOS -> TAREAS
+// ==========================================
+
+app.get('/api/proyectos/estructura', async (req, res) => {
   try {
-    await run('UPDATE usuario SET activo = 0 WHERE id = ?', [id]);
-    res.json({ success: true, message: 'Usuario desactivado' });
+    const proyectos = await all('SELECT * FROM proyecto ORDER BY id ASC');
+    const hitos = await all('SELECT * FROM hito ORDER BY orden ASC');
+    const tareas = await all(`
+      SELECT t.*, p.nombre as predio_nombre 
+      FROM tarea t 
+      LEFT JOIN predio p ON t.predio_id = p.id 
+      ORDER BY t.id ASC
+    `);
+
+    const result = proyectos.map(proj => {
+      const projHitos = hitos.filter(h => h.proyecto_id === proj.id).map(h => {
+        const hTareas = tareas.filter(t => t.hito_id === h.id);
+        const totalMeta = hTareas.reduce((acc, t) => acc + (t.cantidad_meta || 0), 0);
+        const totalAcum = hTareas.reduce((acc, t) => acc + (t.cantidad_acumulada || 0), 0);
+        const pct = totalMeta > 0 ? Math.min(100, Math.round((totalAcum / totalMeta) * 100)) : 0;
+
+        return {
+          ...h,
+          tareas_count: hTareas.length,
+          total_meta: totalMeta,
+          total_acumulada: Math.round(totalAcum * 10) / 10,
+          porcentaje: pct,
+          tareas: hTareas
+        };
+      });
+
+      const projTotalMeta = projHitos.reduce((acc, h) => acc + (h.total_meta || 0), 0);
+      const projTotalAcum = projHitos.reduce((acc, h) => acc + (h.total_acumulada || 0), 0);
+      const projPct = projTotalMeta > 0 ? Math.min(100, Math.round((projTotalAcum / projTotalMeta) * 100)) : 0;
+
+      return {
+        ...proj,
+        hitos_count: projHitos.length,
+        porcentaje_global: projPct,
+        hitos: projHitos
+      };
+    });
+
+    res.json({ success: true, proyectos: result, hitosRaw: hitos, tareasRaw: tareas });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// ==========================================
-// 2. PROYECTOS & TAREAS (Para Gerentes / Supervisores y Admin)
-// ==========================================
-
+// Proyectos CRUD
 app.get('/api/proyectos', async (req, res) => {
   try {
     const proyectos = await all('SELECT * FROM proyecto ORDER BY id ASC');
-    const obras = await all('SELECT * FROM obra');
-
-    const result = proyectos.map(p => {
-      const pObras = obras.filter(o => o.proyecto_id === p.id);
-      return {
-        ...p,
-        obras_count: pObras.length,
-        obras: pObras
-      };
-    });
-
-    res.json({ success: true, proyectos: result });
+    res.json({ success: true, proyectos });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -185,56 +210,106 @@ app.get('/api/proyectos', async (req, res) => {
 
 app.post('/api/proyectos', async (req, res) => {
   const { id, nombre, tipo, ciclo, superficie_meta_ha, fase_catalogo, gerente_id, inicio, fin } = req.body;
-  if (!nombre) return res.status(400).json({ success: false, error: 'Nombre del proyecto requerido' });
+  if (!nombre) return res.status(400).json({ success: false, error: 'Nombre requerido' });
 
   try {
     const cleanId = id ? id.trim() : `PRJ-${Date.now().toString(36).toUpperCase()}`;
     await run(`
       INSERT INTO proyecto (id, nombre, tipo, ciclo, superficie_meta_ha, fase_catalogo, gerente_id, inicio, fin)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      cleanId,
-      nombre.trim(),
-      tipo || 'maiz',
-      ciclo || `${tipo || 'Maíz'} 2026`,
-      Number(superficie_meta_ha) || 0,
-      fase_catalogo || 'V0_V2',
-      gerente_id || 'Gerente Asignado',
-      inicio || new Date().toISOString().split('T')[0],
-      fin || null
-    ]);
+    `, [cleanId, nombre.trim(), tipo || 'maiz', ciclo || `${tipo || 'Maíz'} 2026`, Number(superficie_meta_ha) || 0, fase_catalogo || 'V0_V2', gerente_id || 'Gerente Asignado', inicio || new Date().toISOString().split('T')[0], fin || null]);
 
-    res.json({ success: true, message: 'Proyecto creado exitosamente', projectId: cleanId });
+    res.json({ success: true, message: 'Proyecto creado', projectId: cleanId });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-app.put('/api/proyectos/:id', async (req, res) => {
+// Hitos CRUD
+app.post('/api/hitos', async (req, res) => {
+  const { id, proyecto_id, nombre, descripcion, orden, fecha_meta, superficie_meta_ha, estado } = req.body;
+  if (!proyecto_id || !nombre) return res.status(400).json({ success: false, error: 'Proyecto y Nombre son obligatorios' });
+
+  try {
+    const cleanId = id ? id.trim() : `HITO-${Date.now().toString(36).toUpperCase()}`;
+    await run(`
+      INSERT INTO hito (id, proyecto_id, nombre, descripcion, orden, fecha_meta, superficie_meta_ha, estado)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `, [cleanId, proyecto_id, nombre.trim(), descripcion || '', Number(orden) || 1, fecha_meta || null, Number(superficie_meta_ha) || 0, estado || 'en_progreso']);
+
+    res.json({ success: true, message: 'Hito creado con éxito', hitoId: cleanId });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/hitos/:id', async (req, res) => {
   const { id } = req.params;
-  const { nombre, tipo, ciclo, superficie_meta_ha, fase_catalogo, gerente_id, estado, inicio, fin } = req.body;
+  const { nombre, descripcion, orden, fecha_meta, superficie_meta_ha, estado } = req.body;
 
   try {
     await run(`
-      UPDATE proyecto
+      UPDATE hito
       SET nombre = COALESCE(?, nombre),
-          tipo = COALESCE(?, tipo),
-          ciclo = COALESCE(?, ciclo),
+          descripcion = COALESCE(?, descripcion),
+          orden = COALESCE(?, orden),
+          fecha_meta = COALESCE(?, fecha_meta),
           superficie_meta_ha = COALESCE(?, superficie_meta_ha),
-          fase_catalogo = COALESCE(?, fase_catalogo),
-          gerente_id = COALESCE(?, gerente_id),
-          estado = COALESCE(?, estado),
-          inicio = COALESCE(?, inicio),
-          fin = COALESCE(?, fin)
+          estado = COALESCE(?, estado)
       WHERE id = ?
-    `, [
-      nombre, tipo, ciclo,
-      superficie_meta_ha !== undefined ? Number(superficie_meta_ha) : null,
-      fase_catalogo, gerente_id, estado, inicio, fin,
-      id
-    ]);
+    `, [nombre, descripcion, orden, fecha_meta, superficie_meta_ha, estado, id]);
 
-    res.json({ success: true, message: 'Proyecto actualizado' });
+    res.json({ success: true, message: 'Hito actualizado' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Tareas CRUD
+app.post('/api/tareas', async (req, res) => {
+  const { id, hito_id, proyecto_id, predio_id, nombre, descripcion, actividad_id, unidad, cantidad_meta, responsable, fecha_inicio, fecha_fin } = req.body;
+  if (!hito_id || !nombre) return res.status(400).json({ success: false, error: 'Hito y Nombre requeridos' });
+
+  try {
+    const cleanId = id ? id.trim() : `TAR-${Date.now().toString(36).toUpperCase()}`;
+    // Si no se pasó proyecto_id, obtenerlo del hito
+    let pId = proyecto_id;
+    if (!pId) {
+      const h = await get('SELECT proyecto_id FROM hito WHERE id = ?', [hito_id]);
+      pId = h ? h.proyecto_id : 'PRJ-MAIZ-2026';
+    }
+
+    await run(`
+      INSERT INTO tarea (id, hito_id, proyecto_id, predio_id, nombre, descripcion, actividad_id, unidad, cantidad_meta, cantidad_acumulada, estado, responsable, fecha_inicio, fecha_fin)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'en_progreso', ?, ?, ?)
+    `, [cleanId, hito_id, pId, predio_id || null, nombre.trim(), descripcion || '', actividad_id || 'siembra', unidad || 'ha', Number(cantidad_meta) || 0, responsable || 'Operador Asignado', fecha_inicio || new Date().toISOString().split('T')[0], fecha_fin || null]);
+
+    res.json({ success: true, message: 'Tarea creada con éxito', tareaId: cleanId });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/tareas/:id', async (req, res) => {
+  const { id } = req.params;
+  const { nombre, descripcion, predio_id, actividad_id, unidad, cantidad_meta, cantidad_acumulada, estado, responsable } = req.body;
+
+  try {
+    await run(`
+      UPDATE tarea
+      SET nombre = COALESCE(?, nombre),
+          descripcion = COALESCE(?, descripcion),
+          predio_id = COALESCE(?, predio_id),
+          actividad_id = COALESCE(?, actividad_id),
+          unidad = COALESCE(?, unidad),
+          cantidad_meta = COALESCE(?, cantidad_meta),
+          cantidad_acumulada = COALESCE(?, cantidad_acumulada),
+          estado = COALESCE(?, estado),
+          responsable = COALESCE(?, responsable)
+      WHERE id = ?
+    `, [nombre, descripcion, predio_id, actividad_id, unidad, cantidad_meta, cantidad_acumulada, estado, responsable, id]);
+
+    res.json({ success: true, message: 'Tarea actualizada' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -356,7 +431,7 @@ app.get('/api/tablero/hoy', async (req, res) => {
 });
 
 // ==========================================
-// 4. OBRAS, PREDIOS, ACTIVIDADES Y ROLES
+// 4. OBRAS, PREDIOS Y CATÁLOGOS
 // ==========================================
 
 app.get('/api/obras', async (req, res) => {
@@ -367,6 +442,8 @@ app.get('/api/obras', async (req, res) => {
     const actividades = await all('SELECT * FROM actividad_catalogo ORDER BY nombre ASC');
     const rolesCuadrilla = await all('SELECT * FROM rol_cuadrilla_catalogo ORDER BY nombre ASC');
     const proyectos = await all('SELECT * FROM proyecto ORDER BY nombre ASC');
+    const hitos = await all('SELECT * FROM hito ORDER BY orden ASC');
+    const tareas = await all('SELECT * FROM tarea ORDER BY id ASC');
 
     const result = obras.map(o => {
       const pIds = obraPredios.filter(op => op.obra_id === o.id).map(op => op.predio_id);
@@ -383,7 +460,9 @@ app.get('/api/obras', async (req, res) => {
       predios: predios.map(p => ({ ...p, alias: p.alias ? JSON.parse(p.alias) : [] })),
       actividades,
       rolesCuadrilla,
-      proyectos
+      proyectos,
+      hitos,
+      tareas
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -413,35 +492,6 @@ app.post('/api/obras', async (req, res) => {
   }
 });
 
-app.put('/api/obras/:id', async (req, res) => {
-  const { id } = req.params;
-  const { nombre, fase_actual, estado, responsable_id, proyecto_id, predio_ids } = req.body;
-
-  try {
-    await run(`
-      UPDATE obra 
-      SET nombre = COALESCE(?, nombre),
-          fase_actual = COALESCE(?, fase_actual),
-          estado = COALESCE(?, estado),
-          responsable_id = COALESCE(?, responsable_id),
-          proyecto_id = COALESCE(?, proyecto_id)
-      WHERE id = ?
-    `, [nombre, fase_actual, estado, responsable_id, proyecto_id, id]);
-
-    if (predio_ids && Array.isArray(predio_ids)) {
-      await run('DELETE FROM obra_predio WHERE obra_id = ?', [id]);
-      for (const pid of predio_ids) {
-        await run('INSERT INTO obra_predio (obra_id, predio_id) VALUES (?, ?)', [id, pid]);
-      }
-    }
-
-    res.json({ success: true, message: 'Obra actualizada' });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Predios CRUD
 app.get('/api/predios', async (req, res) => {
   try {
     const predios = await all('SELECT * FROM predio ORDER BY nombre ASC');
@@ -451,33 +501,8 @@ app.get('/api/predios', async (req, res) => {
   }
 });
 
-app.post('/api/predios', async (req, res) => {
-  const { id, nombre, superficie_legal_ha, superficie_util_ha, regimen, restricciones } = req.body;
-  if (!nombre) return res.status(400).json({ success: false, error: 'Nombre de predio requerido' });
-
-  try {
-    const cleanId = id ? id.trim().toLowerCase().replace(/\s+/g, '_') : `predio_${Date.now().toString(36)}`;
-    await run(`
-      INSERT INTO predio (id, nombre, alias, superficie_legal_ha, superficie_util_ha, regimen, restricciones)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `, [
-      cleanId,
-      nombre.trim(),
-      JSON.stringify([nombre.trim()]),
-      Number(superficie_legal_ha) || 0,
-      Number(superficie_util_ha) || Number(superficie_legal_ha) || 0,
-      regimen || 'propio',
-      restricciones || ''
-    ]);
-
-    res.json({ success: true, message: 'Predio registrado exitosamente', predioId: cleanId });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
 // ==========================================
-// 5. REPORTES OFFLINE-FIRST & HISTORIAL
+// 5. REPORTES OFFLINE-FIRST CON HITOS Y TAREAS
 // ==========================================
 
 app.post('/api/reports/sync', async (req, res) => {
@@ -493,6 +518,9 @@ app.post('/api/reports/sync', async (req, res) => {
     try {
       const {
         client_uuid,
+        proyecto_id,
+        hito_id,
+        tarea_id,
         obra_id,
         fecha_operativa,
         offline_created_at,
@@ -514,11 +542,15 @@ app.post('/api/reports/sync', async (req, res) => {
       } else {
         const insertRes = await run(`
           INSERT INTO reporte (
-            client_uuid, obra_id, recibido_en, fecha_operativa, autor_nombre,
+            client_uuid, proyecto_id, hito_id, tarea_id, obra_id,
+            recibido_en, fecha_operativa, autor_nombre,
             texto_original, nota, estado, es_sin_actividad, motivo_sin_actividad
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'confirmado', ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmado', ?, ?)
         `, [
           client_uuid || `sync-${Date.now()}-${Math.random().toString(36).substring(7)}`,
+          proyecto_id || 'PRJ-MAIZ-2026',
+          hito_id || null,
+          tarea_id || null,
           obra_id || 'guayeme',
           nowIso,
           fecha_operativa || offline_created_at?.split(' ')[0] || nowIso.split('T')[0],
@@ -541,19 +573,38 @@ app.post('/api/reports/sync', async (req, res) => {
 
         if (avances && Array.isArray(avances)) {
           for (const a of avances) {
+            const ha = Number(a.cantidad_ha) || Number(a.cantidad) || 0;
             await run(`
               INSERT INTO reporte_linea (
-                reporte_id, predio_id, actividad_id, texto, cantidad, unidad, cantidad_ha, fuente
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, 'campo')
+                reporte_id, tarea_id, hito_id, predio_id, actividad_id, texto, cantidad, unidad, cantidad_ha, fuente
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'campo')
             `, [
               reporteId,
+              a.tarea_id || tarea_id || null,
+              a.hito_id || hito_id || null,
               a.predio_id || 'guayeme',
               a.actividad_id || 'siembra',
               a.texto || `${a.actividad_id} ${a.cantidad} ${a.unidad}`,
               Number(a.cantidad) || 0,
               a.unidad || 'ha',
-              Number(a.cantidad_ha) || Number(a.cantidad) || 0
+              ha
             ]);
+
+            // Actualizar acumulado de la tarea si fue asignada
+            const targetTareaId = a.tarea_id || tarea_id;
+            if (targetTareaId && ha > 0) {
+              await run(`
+                UPDATE tarea 
+                SET cantidad_acumulada = cantidad_acumulada + ?
+                WHERE id = ?
+              `, [ha, targetTareaId]);
+
+              // Revisar si se completó la meta de la tarea
+              const tar = await get('SELECT cantidad_meta, cantidad_acumulada FROM tarea WHERE id = ?', [targetTareaId]);
+              if (tar && tar.cantidad_meta > 0 && tar.cantidad_acumulada >= tar.cantidad_meta) {
+                await run("UPDATE tarea SET estado = 'completada' WHERE id = ?", [targetTareaId]);
+              }
+            }
           }
         }
       }
@@ -565,7 +616,7 @@ app.post('/api/reports/sync', async (req, res) => {
         synced_at: nowIso
       });
     } catch (err) {
-      console.error('Error sincronizando reporte AGROK:', err);
+      console.error('Error sincronizando reporte:', err);
       errors.push({ client_uuid: rep.client_uuid, error: err.message });
     }
   }
@@ -581,9 +632,12 @@ app.post('/api/reports/sync', async (req, res) => {
 app.get('/api/reportes', async (req, res) => {
   try {
     const reportes = await all(`
-      SELECT r.*, o.nombre as obra_nombre 
+      SELECT r.*, o.nombre as obra_nombre, p.nombre as proyecto_nombre, h.nombre as hito_nombre, t.nombre as tarea_nombre
       FROM reporte r 
       JOIN obra o ON r.obra_id = o.id 
+      LEFT JOIN proyecto p ON r.proyecto_id = p.id
+      LEFT JOIN hito h ON r.hito_id = h.id
+      LEFT JOIN tarea t ON r.tarea_id = t.id
       ORDER BY r.id DESC LIMIT 50
     `);
 
@@ -601,7 +655,7 @@ app.get('/api/reportes', async (req, res) => {
 });
 
 // ==========================================
-// 6. INCIDENCIAS, MAQUINARIA, ACTIVOS & MATERIALES
+// 6. INCIDENCIAS, MAQUINARIA, ACTIVOS Y BOT
 // ==========================================
 
 app.get('/api/incidencias', async (req, res) => {
@@ -674,29 +728,11 @@ app.post('/api/incidencias/:folio/estado', async (req, res) => {
   }
 });
 
-// Maquinaria
 app.get('/api/maquinaria', async (req, res) => {
   try {
     const maquinas = await all('SELECT * FROM maquina ORDER BY id ASC');
     const lecturas = await all('SELECT l.*, m.nombre as maquina_nombre FROM lectura_maquina l JOIN maquina m ON l.maquina_id = m.id ORDER BY l.id DESC LIMIT 20');
     res.json({ success: true, maquinas, lecturas });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-app.post('/api/maquinaria', async (req, res) => {
-  const { id, nombre, tipo, propietaria_id, umbral_servicio_hrs, horometro_actual, operador_habitual } = req.body;
-  if (!nombre) return res.status(400).json({ success: false, error: 'Nombre requerido' });
-
-  try {
-    const cleanId = id ? id.trim().toLowerCase().replace(/\s+/g, '_') : `maq_${Date.now().toString(36)}`;
-    await run(`
-      INSERT INTO maquina (id, nombre, tipo, propietaria_id, umbral_servicio_hrs, horometro_actual, operador_habitual)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `, [cleanId, nombre.trim(), tipo || 'tractor', propietaria_id || 'Aspromex', Number(umbral_servicio_hrs) || 300, Number(horometro_actual) || 0, operador_habitual || 'General']);
-
-    res.json({ success: true, message: 'Máquina registrada con éxito', maquinaId: cleanId });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -727,7 +763,6 @@ app.post('/api/lecturas/maquina', async (req, res) => {
   }
 });
 
-// Activos
 app.get('/api/activos', async (req, res) => {
   try {
     const activos = await all('SELECT a.*, p.nombre as predio_nombre FROM activo a JOIN predio p ON a.predio_id = p.id');
@@ -737,24 +772,6 @@ app.get('/api/activos', async (req, res) => {
   }
 });
 
-app.post('/api/activos', async (req, res) => {
-  const { id, nombre, predio_id, tipo, umbral_dias_sin_lectura } = req.body;
-  if (!nombre || !predio_id) return res.status(400).json({ success: false, error: 'Campos requeridos faltantes' });
-
-  try {
-    const cleanId = id ? id.trim().toLowerCase().replace(/\s+/g, '_') : `activo_${Date.now().toString(36)}`;
-    await run(`
-      INSERT INTO activo (id, nombre, predio_id, tipo, umbral_dias_sin_lectura, ultima_lectura_fecha, ultimo_estado)
-      VALUES (?, ?, ?, ?, ?, ?, 'ok')
-    `, [cleanId, nombre.trim(), predio_id, tipo || 'bomba', Number(umbral_dias_sin_lectura) || 30, new Date().toISOString().split('T')[0]]);
-
-    res.json({ success: true, message: 'Activo registrado', activoId: cleanId });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Materiales
 app.get('/api/materiales', async (req, res) => {
   try {
     const materiales = await all(`
@@ -785,14 +802,6 @@ app.post('/api/materiales', async (req, res) => {
   }
 });
 
-// Parser Helper
-app.post('/api/parser/test', (req, res) => {
-  const { text, obra_id } = req.body;
-  const parsed = parseDailyReport(text, new Date(), obra_id);
-  res.json({ success: true, parsed });
-});
-
-// Bot Status & Config
 app.get('/api/bot/status', async (req, res) => {
   try {
     const status = getBotStatus();
