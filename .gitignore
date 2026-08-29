@@ -1,0 +1,29 @@
+# Dependencias
+node_modules/
+*/node_modules/
+
+# Archivos de entorno y credenciales
+.env
+.env.local
+backend/.env
+frontend/.env
+
+# Base de datos SQLite local
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+backend/database.sqlite
+
+# Logs y depuración
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.system_generated/
+
+# Compilación frontend
+frontend/dist/
+dist/
+
+# Sistema Operativo
+.DS_Store
+Thumbs.db

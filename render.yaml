@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: offline-reports-telegram-system
+    runtime: node
+    plan: free
+    buildCommand: npm run render-build
+    startCommand: npm run render-start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false # Configurar en el dashboard de Render con tu token de BotFather
+      - key: PORT
+        value: 10000

@@ -1,0 +1,16 @@
+{
+  "short_name": "ReportesCampo",
+  "name": "Reportes de Campo Offline-First",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192' fill='%230284c7'><rect width='192' height='192' rx='40' fill='%230284c7'/><path d='M96 40L30 75l66 35 66-35-66-35zM30 117l66 35 66-35M30 96l66 35 66-35' stroke='white' stroke-width='10' stroke-linecap='round' stroke-linejoin='round'/></svg>",
+      "type": "image/svg+xml",
+      "sizes": "192x192"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#0284c7",
+  "theme_color": "#0284c7",
+  "display": "standalone",
+  "orientation": "portrait"
+}
