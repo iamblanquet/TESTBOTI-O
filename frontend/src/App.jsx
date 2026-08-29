@@ -20,6 +20,7 @@ import LeaderView from './components/LeaderView';
 import AdminWebConsole from './components/AdminWebConsole';
 import OfflineQueueModal from './components/OfflineQueueModal';
 import TelegramConfigModal from './components/TelegramConfigModal';
+import ErrorBoundary from './components/ErrorBoundary';
 
 import {
   getLocalObras,
@@ -43,7 +44,7 @@ import {
 
 const AUTH_STORAGE_KEY = 'agrok_auth_user_session';
 
-export default function App() {
+function AppContent() {
   // 1. Estado de Sesión y Usuario Autenticado
   const [currentUser, setCurrentUser] = useState(() => {
     try {
@@ -373,5 +374,14 @@ export default function App() {
         onRefreshStatus={loadBotStatus}
       />
     </div>
+  );
+}
+
+// Wrapper con ErrorBoundary
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppContent />
+    </ErrorBoundary>
   );
 }

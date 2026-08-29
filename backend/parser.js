@@ -1,4 +1,8 @@
-// Parser de Reporte Diario de Campo AGROK según docs/2 — Telegram.md §2
+/**
+ * Parser de Reporte Diario de Campo AGROK según docs/2 — Telegram.md §2
+ * Extrae información estructurada de reportes de campo en texto libre
+ * @module parser
+ */
 
 const ACTIVIDAD_KEYWORDS = [
   { id: 'desmonte', regex: /desmont/i },
@@ -63,6 +67,13 @@ const PREDIO_ALIAS_MAP = {
   'potrero': 'potrero_yeguas'
 };
 
+/**
+ * Parsea un reporte diario de campo desde texto libre
+ * @param {string} rawText - Texto del reporte a parsear
+ * @param {Date} receivedDate - Fecha de recepción del reporte
+ * @param {string|null} threadObraId - ID de la obra desde el thread de Telegram
+ * @returns {Object} Objeto estructurado con la información del reporte
+ */
 function parseDailyReport(rawText, receivedDate = new Date(), threadObraId = null) {
   const result = {
     obra_id: threadObraId || null,
@@ -78,110 +89,135 @@ function parseDailyReport(rawText, receivedDate = new Date(), threadObraId = nul
     sin_clasificar: []
   };
 
-  if (!rawText || typeof rawText !== 'string') return result;
-
-  const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
-  let currentSection = 'general';
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const cleanLine = line.replace(/[*_~`]/g, '').trim();
-
-    // 1. Detectar Cabeceras
-    if (/^obra\s*:/i.test(cleanLine)) {
-      const val = cleanLine.replace(/^obra\s*:/i, '').trim();
-      result.obra_nombre_pista = val;
-      if (!result.obra_id) {
-        result.obra_id = inferObraId(val);
-      }
-      currentSection = 'obra';
-      continue;
-    }
-
-    if (/^(fecha|hora)\s*:/i.test(cleanLine)) {
-      const val = cleanLine.replace(/^(fecha|hora)\s*:/i, '').trim();
-      result.fecha_escrita = val;
-      result.fecha_operativa = calculateFechaOperativa(val, receivedDate);
-      currentSection = 'fecha';
-      continue;
-    }
-
-    if (/^(fuerza de trabajo|cuadrilla|personal)\s*:/i.test(cleanLine)) {
-      currentSection = 'cuadrilla';
-      continue;
-    }
-
-    if (/^(operaci[oó]n actual|actividades|actividades realizadas|trabajo realizado)\s*:/i.test(cleanLine)) {
-      currentSection = 'actividades';
-      continue;
-    }
-
-    if (/^(avance|avance diario|avance aprox|[aá]rea ejecutada|[aá]rea semanal acumulada)\s*:/i.test(cleanLine)) {
-      currentSection = 'avance';
-      continue;
-    }
-
-    if (/^(hor[oó]metro|diesel|combustible)\s*:/i.test(cleanLine)) {
-      currentSection = 'horometro';
-      continue;
-    }
-
-    if (/^(nota|observaciones|novedades)\s*:/i.test(cleanLine)) {
-      currentSection = 'nota';
-      const val = cleanLine.replace(/^(nota|observaciones|novedades)\s*:/i, '').trim();
-      if (val) result.notas.push(val);
-      continue;
-    }
-
-    // 2. Procesar Contenido según Sección Activa
-    if (currentSection === 'cuadrilla') {
-      const cItem = parseCuadrillaLine(cleanLine);
-      if (cItem) {
-        result.cuadrilla.push(cItem);
-        continue;
-      }
-    }
-
-    if (currentSection === 'actividades') {
-      if (cleanLine.startsWith('-') || cleanLine.startsWith('•') || cleanLine.startsWith('*')) {
-        const actItem = parseActividadLine(cleanLine);
-        result.actividades.push(actItem);
-        continue;
-      }
-    }
-
-    // 3. Parser de Avances (Detectar números con ha/m2/ml en cualquier parte del texto o sección)
-    const avanceMatches = parseAvanceInLine(cleanLine);
-    if (avanceMatches && avanceMatches.length > 0) {
-      result.avances.push(...avanceMatches);
-      continue;
-    }
-
-    // Si no cayó en sección específica
-    if (currentSection === 'nota') {
-      result.notas.push(cleanLine);
-    } else if (cleanLine.startsWith('-') || cleanLine.startsWith('•')) {
-      // Viñeta suelta, clasificar como actividad
-      const act = parseActividadLine(cleanLine);
-      result.actividades.push(act);
-    } else if (cleanLine.length > 0) {
-      result.sin_clasificar.push(cleanLine);
-    }
+  // Validación de entrada
+  if (!rawText || typeof rawText !== 'string') {
+    console.warn('Parser: texto de entrada inválido');
+    return result;
   }
 
-  // Normalizar avances con predio por defecto si no se detectó y la obra tiene predio único
-  result.avances = resolvePrediosForAvances(result.avances, result.obra_id);
+  if (rawText.length > 10000) {
+    console.warn('Parser: texto demasiado largo, truncando a 10000 caracteres');
+    rawText = rawText.substring(0, 10000);
+  }
+
+  try {
+    const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
+    let currentSection = 'general';
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const cleanLine = line.replace(/[*_~`]/g, '').trim();
+
+      // 1. Detectar Cabeceras
+      if (/^obra\s*:/i.test(cleanLine)) {
+        const val = cleanLine.replace(/^obra\s*:/i, '').trim();
+        result.obra_nombre_pista = val;
+        if (!result.obra_id) {
+          result.obra_id = inferObraId(val);
+        }
+        currentSection = 'obra';
+        continue;
+      }
+
+      if (/^(fecha|hora)\s*:/i.test(cleanLine)) {
+        const val = cleanLine.replace(/^(fecha|hora)\s*:/i, '').trim();
+        result.fecha_escrita = val;
+        result.fecha_operativa = calculateFechaOperativa(val, receivedDate);
+        currentSection = 'fecha';
+        continue;
+      }
+
+      if (/^(fuerza de trabajo|cuadrilla|personal)\s*:/i.test(cleanLine)) {
+        currentSection = 'cuadrilla';
+        continue;
+      }
+
+      if (/^(operaci[oó]n actual|actividades|actividades realizadas|trabajo realizado)\s*:/i.test(cleanLine)) {
+        currentSection = 'actividades';
+        continue;
+      }
+
+      if (/^(avance|avance diario|avance aprox|[aá]rea ejecutada|[aá]rea semanal acumulada)\s*:/i.test(cleanLine)) {
+        currentSection = 'avance';
+        continue;
+      }
+
+      if (/^(hor[oó]metro|diesel|combustible)\s*:/i.test(cleanLine)) {
+        currentSection = 'horometro';
+        continue;
+      }
+
+      if (/^(nota|observaciones|novedades)\s*:/i.test(cleanLine)) {
+        currentSection = 'nota';
+        const val = cleanLine.replace(/^(nota|observaciones|novedades)\s*:/i, '').trim();
+        if (val) result.notas.push(val);
+        continue;
+      }
+
+      // 2. Procesar Contenido según Sección Activa
+      if (currentSection === 'cuadrilla') {
+        const cItem = parseCuadrillaLine(cleanLine);
+        if (cItem) {
+          result.cuadrilla.push(cItem);
+          continue;
+        }
+      }
+
+      if (currentSection === 'actividades') {
+        if (cleanLine.startsWith('-') || cleanLine.startsWith('•') || cleanLine.startsWith('*')) {
+          const actItem = parseActividadLine(cleanLine);
+          result.actividades.push(actItem);
+          continue;
+        }
+      }
+
+      // 3. Parser de Avances (Detectar números con ha/m2/ml en cualquier parte del texto o sección)
+      const avanceMatches = parseAvanceInLine(cleanLine);
+      if (avanceMatches && avanceMatches.length > 0) {
+        result.avances.push(...avanceMatches);
+        continue;
+      }
+
+      // Si no cayó en sección específica
+      if (currentSection === 'nota') {
+        result.notas.push(cleanLine);
+      } else if (cleanLine.startsWith('-') || cleanLine.startsWith('•')) {
+        // Viñeta suelta, clasificar como actividad
+        const act = parseActividadLine(cleanLine);
+        result.actividades.push(act);
+      } else if (cleanLine.length > 0) {
+        result.sin_clasificar.push(cleanLine);
+      }
+    }
+
+    // Normalizar avances con predio por defecto si no se detectó y la obra tiene predio único
+    result.avances = resolvePrediosForAvances(result.avances, result.obra_id);
+
+  } catch (error) {
+    console.error('Error durante el parseo del reporte:', error);
+  }
 
   return result;
 }
 
 function parseCuadrillaLine(line) {
+  if (!line || typeof line !== 'string') return null;
+  
   const match = line.match(/^[-•*]?\s*(\d+)?\s*(.+?)\s*(?:[x×]\s*(\d+))?$/);
   if (!match) return null;
 
   const countStr = match[1] || match[3] || '1';
-  const headcount = parseInt(countStr, 10) || 1;
+  const headcount = parseInt(countStr, 10);
+  
+  // Validar que el headcount sea razonable (1-100 personas)
+  if (isNaN(headcount) || headcount < 1 || headcount > 100) {
+    return null;
+  }
+  
   const roleText = match[2].trim();
+  if (roleText.length < 2 || roleText.length > 100) {
+    return null;
+  }
 
   let matchedRol = 'auxiliar';
   for (const r of ROL_KEYWORDS) {
@@ -216,6 +252,10 @@ function parseActividadLine(line) {
 }
 
 function parseAvanceInLine(line) {
+  if (!line || typeof line !== 'string' || line.length > 500) {
+    return [];
+  }
+  
   const results = [];
   // Regex: busca "6.5 ha del predio cristina", "10 m2", "50 ml", etc.
   const regex = /(\d+[.,]?\d*)\s*(ha|hect[aá]reas?|has|m2|m²|ml|metros lineales|%)/gi;
@@ -225,6 +265,11 @@ function parseAvanceInLine(line) {
     const rawVal = match[1].replace(',', '.');
     const val = parseFloat(rawVal);
     const unit = match[2].toLowerCase();
+
+    // Validar que el valor sea razonable
+    if (isNaN(val) || val < 0 || val > 10000) {
+      continue;
+    }
 
     let standardUnit = 'ha';
     let cantidad_ha = val;
@@ -244,7 +289,7 @@ function parseAvanceInLine(line) {
     const predioFound = findPredioInText(line, match.index);
 
     results.push({
-      texto: line,
+      texto: line.substring(0, 100), // Limitar longitud
       cantidad: val,
       unidad: standardUnit,
       cantidad_ha: cantidad_ha !== null ? Math.round(cantidad_ha * 100) / 100 : null,
@@ -297,21 +342,45 @@ function inferObraId(text) {
 
 function calculateFechaOperativa(writtenDateStr, receivedDate) {
   // Regla spec v2 §6: si la fecha escrita está a ±1 día de received_en, usarla; si no, usar receivedDate
-  if (!writtenDateStr) return formatYMD(receivedDate);
+  if (!writtenDateStr || typeof writtenDateStr !== 'string') {
+    return formatYMD(receivedDate);
+  }
 
-  const parts = writtenDateStr.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/);
-  if (parts) {
-    let day = parseInt(parts[1], 10);
-    let month = parseInt(parts[2], 10) - 1;
-    let year = parseInt(parts[3], 10);
-    if (year < 100) year += 2000;
+  try {
+    // Intentar varios formatos de fecha
+    const parts = writtenDateStr.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/);
+    if (parts) {
+      let day = parseInt(parts[1], 10);
+      let month = parseInt(parts[2], 10) - 1;
+      let year = parseInt(parts[3], 10);
+      
+      // Validaciones básicas
+      if (day < 1 || day > 31 || month < 0 || month > 11) {
+        console.warn('Parser: fecha inválida detectada', writtenDateStr);
+        return formatYMD(receivedDate);
+      }
+      
+      if (year < 100) year += 2000;
+      if (year < 2020 || year > 2030) {
+        console.warn('Parser: año fuera de rango razonable', year);
+        return formatYMD(receivedDate);
+      }
 
-    const parsedDate = new Date(year, month, day);
-    const diffDays = Math.abs((parsedDate - receivedDate) / (1000 * 60 * 60 * 24));
+      const parsedDate = new Date(year, month, day);
+      
+      // Verificar que la fecha es válida
+      if (isNaN(parsedDate.getTime())) {
+        return formatYMD(receivedDate);
+      }
+      
+      const diffDays = Math.abs((parsedDate - receivedDate) / (1000 * 60 * 60 * 24));
 
-    if (diffDays <= 1.5) {
-      return formatYMD(parsedDate);
+      if (diffDays <= 1.5) {
+        return formatYMD(parsedDate);
+      }
     }
+  } catch (error) {
+    console.warn('Parser: error al calcular fecha operativa', error.message);
   }
 
   return formatYMD(receivedDate);

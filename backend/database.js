@@ -388,7 +388,64 @@ async function initDb() {
     )
   `);
 
+  // Crear índices para mejorar el rendimiento de las consultas
+  await createIndexes();
+
   await seedInitialData();
+}
+
+async function createIndexes() {
+  console.log('📊 Creando índices de base de datos para optimización...');
+  
+  try {
+    // Índices para usuarios
+    await run('CREATE INDEX IF NOT EXISTS idx_usuario_username ON usuario(username)');
+    await run('CREATE INDEX IF NOT EXISTS idx_usuario_tg_user_id ON usuario(tg_user_id)');
+    await run('CREATE INDEX IF NOT EXISTS idx_usuario_rol ON usuario(rol)');
+    
+    // Índices para reportes
+    await run('CREATE INDEX IF NOT EXISTS idx_reporte_obra_id ON reporte(obra_id)');
+    await run('CREATE INDEX IF NOT EXISTS idx_reporte_fecha_operativa ON reporte(fecha_operativa)');
+    await run('CREATE INDEX IF NOT EXISTS idx_reporte_client_uuid ON reporte(client_uuid)');
+    await run('CREATE INDEX IF NOT EXISTS idx_reporte_estado ON reporte(estado)');
+    
+    // Índices para reporte_linea
+    await run('CREATE INDEX IF NOT EXISTS idx_reporte_linea_reporte_id ON reporte_linea(reporte_id)');
+    await run('CREATE INDEX IF NOT EXISTS idx_reporte_linea_predio_id ON reporte_linea(predio_id)');
+    await run('CREATE INDEX IF NOT EXISTS idx_reporte_linea_tarea_id ON reporte_linea(tarea_id)');
+    
+    // Índices para tareas y hitos
+    await run('CREATE INDEX IF NOT EXISTS idx_tarea_hito_id ON tarea(hito_id)');
+    await run('CREATE INDEX IF NOT EXISTS idx_tarea_proyecto_id ON tarea(proyecto_id)');
+    await run('CREATE INDEX IF NOT EXISTS idx_tarea_estado ON tarea(estado)');
+    await run('CREATE INDEX IF NOT EXISTS idx_hito_proyecto_id ON hito(proyecto_id)');
+    
+    // Índices para obras y predios
+    await run('CREATE INDEX IF NOT EXISTS idx_obra_proyecto_id ON obra(proyecto_id)');
+    await run('CREATE INDEX IF NOT EXISTS idx_obra_estado ON obra(estado)');
+    await run('CREATE INDEX IF NOT EXISTS idx_obra_predio_obra_id ON obra_predio(obra_id)');
+    await run('CREATE INDEX IF NOT EXISTS idx_obra_predio_predio_id ON obra_predio(predio_id)');
+    
+    // Índices para incidencias
+    await run('CREATE INDEX IF NOT EXISTS idx_incidencia_obra_id ON incidencia(obra_id)');
+    await run('CREATE INDEX IF NOT EXISTS idx_incidencia_estado ON incidencia(estado)');
+    await run('CREATE INDEX IF NOT EXISTS idx_incidencia_evento_folio ON incidencia_evento(folio)');
+    
+    // Índices para maquinaria
+    await run('CREATE INDEX IF NOT EXISTS idx_lectura_maquina_maquina_id ON lectura_maquina(maquina_id)');
+    await run('CREATE INDEX IF NOT EXISTS idx_lectura_maquina_fecha ON lectura_maquina(fecha)');
+    
+    // Índices para materiales
+    await run('CREATE INDEX IF NOT EXISTS idx_material_obra_id ON material(obra_id)');
+    
+    // Índices para mediciones
+    await run('CREATE INDEX IF NOT EXISTS idx_medicion_obra_id ON medicion(obra_id)');
+    await run('CREATE INDEX IF NOT EXISTS idx_medicion_predio_id ON medicion(predio_id)');
+    
+    console.log('✅ Índices creados exitosamente');
+  } catch (error) {
+    console.warn('⚠️ Algunos índices ya existían o hubo un error:', error.message);
+  }
 }
 
 async function seedInitialData() {

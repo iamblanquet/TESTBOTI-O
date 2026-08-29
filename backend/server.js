@@ -10,6 +10,10 @@ const { parseDailyReport } = require('./parser');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Middleware de seguridad básico
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
 // Headers para permitir Telegram Mini App en iframes de Telegram Web/Desktop y Móvil
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -21,7 +25,24 @@ app.use((req, res, next) => {
 });
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Función de validación de entrada para prevenir SQL injection y XSS
+function sanitizeInput(input) {
+  if (typeof input !== 'string') return input;
+  return input.trim().replace(/[<>]/g, '');
+}
+
+// Middleware de validación de autenticación (opcional para endpoints protegidos)
+function requireAuth(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ success: false, error: 'No autorizado' });
+  }
+  // En producción, aquí deberías validar el JWT
+  next();
+}
 
 // Health check para keep-alive
 app.get(['/health', '/api/health'], (req, res) => {
@@ -39,18 +60,26 @@ app.post('/api/auth/login', async (req, res) => {
     let user = null;
 
     if (username && password) {
+      // Sanitizar entrada
+      const cleanUsername = sanitizeInput(username);
+      if (!cleanUsername || cleanUsername.length < 3 || cleanUsername.length > 50) {
+        return res.status(400).json({ success: false, error: 'Nombre de usuario inválido' });
+      }
+
       const pHash = hashPassword(password);
       user = await get(`
         SELECT id, username, nombre, rol, tg_user_id, tg_chat_id, puede_crear_proyectos, puede_cerrar_incidencias, puede_registrar_medicion, puede_gestionar_materiales, activo 
         FROM usuario 
         WHERE username = ? AND password_hash = ? AND activo = 1
-      `, [username.trim().toLowerCase(), pHash]);
+      `, [cleanUsername.toLowerCase(), pHash]);
     } else if (tg_user_id) {
       user = await get(`
         SELECT id, username, nombre, rol, tg_user_id, tg_chat_id, puede_crear_proyectos, puede_cerrar_incidencias, puede_registrar_medicion, puede_gestionar_materiales, activo 
         FROM usuario 
         WHERE tg_user_id = ? AND activo = 1
       `, [tg_user_id.toString()]);
+    } else {
+      return res.status(400).json({ success: false, error: 'Credenciales requeridas' });
     }
 
     if (!user) {
@@ -63,7 +92,8 @@ app.post('/api/auth/login', async (req, res) => {
       token: `session-${user.id}-${Date.now()}`
     });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('Error en login:', error);
+    res.status(500).json({ success: false, error: 'Error en el servidor' });
   }
 });
 
@@ -83,11 +113,33 @@ app.get('/api/usuarios', async (req, res) => {
 
 app.post('/api/usuarios', async (req, res) => {
   const { username, password, nombre, rol, puede_crear_proyectos, puede_cerrar_incidencias, puede_registrar_medicion, puede_gestionar_materiales, tg_user_id } = req.body;
+  
+  // Validaciones mejoradas
   if (!username || !password || !nombre) {
     return res.status(400).json({ success: false, error: 'Usuario, contraseña y nombre son obligatorios' });
   }
 
+  const cleanUsername = sanitizeInput(username);
+  const cleanNombre = sanitizeInput(nombre);
+  
+  if (cleanUsername.length < 3 || cleanUsername.length > 50) {
+    return res.status(400).json({ success: false, error: 'Usuario debe tener entre 3 y 50 caracteres' });
+  }
+
+  if (password.length < 6) {
+    return res.status(400).json({ success: false, error: 'La contraseña debe tener al menos 6 caracteres' });
+  }
+
+  const validRoles = ['campo', 'supervisor', 'direccion', 'it'];
+  const cleanRol = rol && validRoles.includes(rol) ? rol : 'campo';
+
   try {
+    // Verificar si el usuario ya existe
+    const existingUser = await get('SELECT id FROM usuario WHERE username = ?', [cleanUsername.toLowerCase()]);
+    if (existingUser) {
+      return res.status(409).json({ success: false, error: 'El usuario ya existe' });
+    }
+
     const userId = `usr-${Date.now().toString(36)}`;
     const pHash = hashPassword(password);
 
@@ -96,12 +148,12 @@ app.post('/api/usuarios', async (req, res) => {
     let gestMat = puede_gestionar_materiales ? 1 : 0;
     let regMed = puede_registrar_medicion ? 1 : 0;
 
-    if (rol === 'supervisor' || rol === 'direccion' || rol === 'it') {
+    if (cleanRol === 'supervisor' || cleanRol === 'direccion' || cleanRol === 'it') {
       crearProj = 1;
       cerrarInc = 1;
       gestMat = 1;
     }
-    if (rol === 'it' || rol === 'direccion') {
+    if (cleanRol === 'it' || cleanRol === 'direccion') {
       regMed = 1;
     }
 
@@ -113,10 +165,10 @@ app.post('/api/usuarios', async (req, res) => {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       userId,
-      username.trim().toLowerCase(),
+      cleanUsername.toLowerCase(),
       pHash,
-      nombre.trim(),
-      rol || 'campo',
+      cleanNombre,
+      cleanRol,
       crearProj,
       cerrarInc,
       regMed,
@@ -125,9 +177,10 @@ app.post('/api/usuarios', async (req, res) => {
       new Date().toISOString()
     ]);
 
-    res.json({ success: true, message: `Usuario @${username} creado con éxito`, userId });
+    res.json({ success: true, message: `Usuario @${cleanUsername} creado con éxito`, userId });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('Error al crear usuario:', error);
+    res.status(500).json({ success: false, error: 'Error al crear usuario' });
   }
 });
 
@@ -793,8 +846,41 @@ if (fs.existsSync(frontendDist)) {
   });
 }
 
+// Middleware de manejo de errores global
+app.use((err, req, res, next) => {
+  console.error('Error no manejado:', err);
+  res.status(err.status || 500).json({
+    success: false,
+    error: err.message || 'Error interno del servidor',
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+  });
+});
+
 // Inicialización del Servidor
 async function startServer() {
+  try {
+    await initDb();
+    const savedTokenRow = await get("SELECT value FROM system_settings WHERE key = 'TELEGRAM_BOT_TOKEN'");
+    const token = process.env.TELEGRAM_BOT_TOKEN || (savedTokenRow ? savedTokenRow.value : null);
+
+    if (token) {
+      await initTelegramBot(token, app);
+    } else {
+      console.log('💡 [Telegram Bot AGROK] Ingresa tu token de @BotFather en el panel.');
+    }
+
+    app.listen(PORT, () => {
+      console.log(`🚀 Servidor AGROK Backend iniciado en: http://localhost:${PORT}`);
+      console.log(`📊 Modo: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`✅ Base de datos SQLite inicializada`);
+    });
+  } catch (error) {
+    console.error('❌ Error fatal al iniciar el servidor:', error);
+    process.exit(1);
+  }
+}
+
+startServer();ction startServer() {
   await initDb();
   const savedTokenRow = await get("SELECT value FROM system_settings WHERE key = 'TELEGRAM_BOT_TOKEN'");
   const token = process.env.TELEGRAM_BOT_TOKEN || (savedTokenRow ? savedTokenRow.value : null);

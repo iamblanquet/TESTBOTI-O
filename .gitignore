@@ -5,6 +5,7 @@ node_modules/
 # Archivos de entorno y credenciales
 .env
 .env.local
+.env.production
 backend/.env
 frontend/.env
 
@@ -14,16 +15,40 @@ frontend/.env
 *.sqlite-journal
 backend/database.sqlite
 
+# Backups de base de datos (descomentar si quieres excluirlos)
+# backend/backups/
+
 # Logs y depuración
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .system_generated/
+*.log
 
 # Compilación frontend
 frontend/dist/
 dist/
+build/
+
+# Cache y temporales
+.cache/
+.temp/
+.tmp/
+*.swp
+*.swo
+*~
 
 # Sistema Operativo
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# IDEs
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Cobertura de tests
+coverage/
+.nyc_output/

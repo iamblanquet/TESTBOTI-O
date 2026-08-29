@@ -5,7 +5,13 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "backup": "node backup.js",
+    "backup:list": "node backup.js list",
+    "backup:restore": "node backup.js restore",
+    "test": "node tests/run-all-tests.js",
+    "test:parser": "node tests/parser.test.js",
+    "test:validators": "node tests/validators.test.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

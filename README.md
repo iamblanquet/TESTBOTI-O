@@ -2,6 +2,19 @@
 
 Sistema integral desarrollado e implementado a partir de la especificación técnica en `docs/`:
 
+## 📋 Tabla de Contenidos
+
+- [Características Principales](#características-principales)
+- [Arquitectura del Sistema](#arquitectura-del-sistema)
+- [Instalación y Desarrollo](#instalación-y-desarrollo)
+- [Despliegue en Producción](#despliegue-en-producción)
+- [Configuración](#configuración)
+- [Scripts Disponibles](#scripts-disponibles)
+- [Seguridad](#seguridad)
+- [Mantenimiento](#mantenimiento)
+
+## ✨ Características Principales
+
 1. **📱 Cuadrilla / Campo (Telegram Mini App Offline-First):**
    - Captura de reportes diarios de campo con soporte **100% Offline-First** (marca de tiempo inmutable).
    - Catálogo cargado: Obras (`Guayeme`, `Desmonte Sta Teresita`, `Siembra Clúster Mangos`, `San Alberto`, etc.) y sus Predios asociados.
@@ -43,6 +56,166 @@ Este repositorio está 100% preparado para desplegarse como un **Web Service gra
 7. ¡Listo! Render te dará una URL HTTPS pública (ej: `https://offline-reports-xxxx.onrender.com`) accesible desde cualquier teléfono en cualquier lugar del mundo.
 
 ---
+
+## 🚀 Inicio Rápido Local
+
+### Requisitos Previos
+- Node.js (v16 o superior)
+- npm o yarn
+- Git
+
+### Instalación Rápida
+Haz doble clic en el archivo:
+```bash
+start.bat
+```
+
+### Opción 2: Ejecutar manualmente desde la terminal
+
+**Terminal 1 (Backend):**
+```bash
+cd backend
+npm install
+cp .env.example .env  # Copia el archivo de configuración
+# Edita .env y agrega tu TELEGRAM_BOT_TOKEN si lo tienes
+npm start
+```
+*Servidor corriendo en: `http://localhost:3001`*
+
+**Terminal 2 (Frontend):**
+```bash
+cd frontend
+npm install
+npm run dev -- --host
+```
+*Aplicación corriendo en: `http://localhost:5173`*
+
+## ⚙️ Configuración
+
+### Variables de Entorno (Backend)
+
+Crea un archivo `.env` en la carpeta `backend/` basándote en `.env.example`:
+
+```env
+# Servidor
+NODE_ENV=development
+PORT=3001
+
+# Bot de Telegram (opcional)
+TELEGRAM_BOT_TOKEN=tu_token_aqui
+
+# URL de la webapp para Telegram Mini App
+WEBAPP_URL=http://localhost:5173
+```
+
+### Configuración de Desarrollo
+
+1. **Base de Datos**: Se crea automáticamente en `backend/database.sqlite`
+2. **Usuario por defecto**: 
+   - Usuario: `admin`
+   - Contraseña: `admin123`
+   - Rol: IT (acceso completo)
+
+## 📦 Scripts Disponibles
+
+### Backend
+
+```bash
+npm start              # Iniciar servidor en producción
+npm run dev            # Modo desarrollo con hot-reload
+npm run backup         # Crear backup de la base de datos
+npm run backup:list    # Listar backups disponibles
+npm run backup:restore # Restaurar un backup
+npm test               # Ejecutar todos los tests
+npm run test:parser    # Ejecutar solo tests del parser
+npm run test:validators # Ejecutar solo tests de validadores
+```
+
+### Frontend
+
+```bash
+npm run dev            # Servidor de desarrollo
+npm run build          # Compilar para producción
+npm run preview        # Preview del build de producción
+```
+
+## 🧪 Testing
+
+El proyecto incluye tests unitarios para las funciones críticas:
+
+### Ejecutar Tests
+
+```bash
+cd backend
+npm test
+```
+
+### Cobertura de Tests
+
+- **Parser de Reportes**: Valida parseo de texto, detección de obras, predios, cuadrilla, avances
+- **Validadores**: Valida entrada de usuarios, sanitización, validación de datos
+
+### Estructura de Tests
+
+```
+backend/tests/
+├── parser.test.js       # Tests del parser de reportes
+├── validators.test.js   # Tests de validadores de entrada
+└── run-all-tests.js     # Runner principal
+```
+
+Los tests verifican:
+- ✅ Parseo correcto de reportes en diferentes formatos
+- ✅ Manejo de casos edge (texto vacío, muy largo, inválido)
+- ✅ Validación de entrada de usuarios
+- ✅ Sanitización contra XSS y SQL injection
+- ✅ Cálculo correcto de fechas operativas
+- ✅ Detección de predios por alias
+- ✅ Parseo de diferentes unidades (ha, m2, ml)
+
+
+## 🔒 Seguridad
+
+### Mejoras Implementadas
+
+1. **Validación de Entrada**: Todos los inputs del usuario son sanitizados
+2. **Prevención de SQL Injection**: Uso de prepared statements
+3. **Hashing de Contraseñas**: SHA-256 para almacenamiento seguro
+4. **Límites de Tamaño**: Protección contra payloads grandes
+5. **Error Handling**: No se exponen detalles internos en producción
+
+### Recomendaciones para Producción
+
+1. Cambiar todas las contraseñas por defecto
+2. Configurar variables de entorno seguras
+3. Usar HTTPS en producción
+4. Implementar rate limiting en la API
+5. Configurar backups automáticos
+6. Implementar JWT real para autenticación
+
+## 🛠️ Mantenimiento
+
+### Backups de Base de Datos
+
+```bash
+# Crear backup manual
+cd backend
+npm run backup
+
+# Listar backups
+npm run backup:list
+
+# Restaurar backup
+npm run backup:restore nombre-del-backup.sqlite
+```
+
+Los backups se guardan en `backend/backups/` y automáticamente se mantienen solo los últimos 10.
+
+### Logs y Monitoreo
+
+- Los logs del servidor se muestran en la consola
+- Errores críticos se registran en la consola con stack trace (desarrollo)
+- En producción, considera usar un servicio de logging como Winston o Pino
 
 ## 🚀 Inicio Rápido Local
 Haz doble clic en el archivo:
