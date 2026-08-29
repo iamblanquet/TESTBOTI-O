@@ -1,4 +1,4 @@
-const CACHE_NAME = 'offline-reports-v1';
+const CACHE_NAME = 'agrok-pwa-v2';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
@@ -46,8 +46,7 @@ self.addEventListener('fetch', (event) => {
           }
           return networkResponse;
         }).catch(() => {
-          // Si falla y es HTML, devolver la app base
-          if (event.request.headers.get('accept').includes('text/html')) {
+          if (event.request.headers.get('accept')?.includes('text/html')) {
             return caches.match('/');
           }
         });
