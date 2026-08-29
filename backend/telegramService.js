@@ -39,41 +39,50 @@ async function initTelegramBot(token, expressApp = null) {
     if (bot) {
       try {
         bot.stopPolling();
+        await bot.deleteWebHook();
       } catch (e) {}
       bot = null;
     }
 
     currentToken = token.trim();
-    console.log('🤖 [Telegram Bot AGROK] Inicializando bot con Mini App oficial...');
+    const appUrl = getWebAppUrl();
+    const isProduction = Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL || process.env.NODE_ENV === 'production');
 
+    console.log(`🤖 [Telegram Bot AGROK] Inicializando bot en modo: ${isProduction ? 'WEBHOOK (Render)' : 'POLLING'}...`);
+
+    // En producción (Render) no usamos polling sino Webhooks para evitar errores 409 Conflict
     bot = new TelegramBot(currentToken, {
-      polling: {
-        autoStart: false,
-        params: { timeout: 10 }
+      polling: !isProduction
+    });
+
+    if (isProduction && appUrl && appUrl.startsWith('https://')) {
+      const webhookUrl = `${appUrl}/api/telegram-webhook`;
+      try {
+        await bot.setWebHook(webhookUrl);
+        console.log(`🔗 [Telegram Bot AGROK] Webhook activo en: ${webhookUrl}`);
+      } catch (whErr) {
+        console.error('⚠️ [Telegram Bot AGROK] Error configurando webhook:', whErr.message);
       }
-    });
+    } else {
+      try {
+        await bot.deleteWebHook();
+        console.log('🧹 [Telegram Bot AGROK] Webhook eliminado para polling local.');
+      } catch (e) {}
 
-    try {
-      await bot.deleteWebHook();
-      console.log('🧹 [Telegram Bot AGROK] Webhook previo limpiado.');
-    } catch (whErr) {
-      console.log('ℹ️ [Telegram Bot AGROK] Info webhook:', whErr.message);
+      bot.on('polling_error', (error) => {
+        if (error.message && error.message.includes('409 Conflict')) {
+          // Silenciar conflicto temporal durante deploys
+          return;
+        }
+        console.error('⚠️ [Telegram Bot AGROK] Error de polling:', error.code, error.message);
+      });
     }
-
-    bot.startPolling();
-    console.log('✅ [Telegram Bot AGROK] Polling iniciado activamente.');
-
-    bot.on('polling_error', (error) => {
-      if (error.message && error.message.includes('409 Conflict')) return;
-      console.error('⚠️ [Telegram Bot AGROK] Polling error:', error.code, error.message);
-    });
 
     setupBotHandlers(bot);
 
     bot.getMe().then(async (me) => {
-      console.log(`🎉 [Telegram Bot AGROK] Conectado como @${me.username} (${me.first_name})`);
+      console.log(`🎉 [Telegram Bot AGROK] Conectado exitosamente como @${me.username} (${me.first_name})`);
       
-      const appUrl = getWebAppUrl();
       if (appUrl && appUrl.startsWith('https://')) {
         try {
           await bot.setChatMenuButton({
@@ -92,7 +101,7 @@ async function initTelegramBot(token, expressApp = null) {
 
     return bot;
   } catch (error) {
-    console.error('❌ [Telegram Bot AGROK] Error en initTelegramBot:', error.message);
+    console.error('❌ [Telegram Bot AGROK] Error crítico en initTelegramBot:', error.message);
     return null;
   }
 }
@@ -133,7 +142,6 @@ function setupBotHandlers(botInstance) {
       }
     });
 
-    // Enviar teclado persistente de soporte
     botInstance.sendMessage(chatId, `_Usa el menú rápido en tu teclado o el botón de menú para navegar:_`, {
       parse_mode: 'Markdown',
       reply_markup: getPersistentMenuKeyboard(appUrl)

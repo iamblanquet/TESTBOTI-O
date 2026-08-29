@@ -10,7 +10,7 @@ const { parseDailyReport } = require('./parser');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Middleware de seguridad básico
+// Middleware de seguridad y parseo
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -25,28 +25,29 @@ app.use((req, res, next) => {
 });
 
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Función de validación de entrada para prevenir SQL injection y XSS
+// Función de validación de entrada
 function sanitizeInput(input) {
   if (typeof input !== 'string') return input;
   return input.trim().replace(/[<>]/g, '');
 }
 
-// Middleware de validación de autenticación (opcional para endpoints protegidos)
-function requireAuth(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ success: false, error: 'No autorizado' });
-  }
-  // En producción, aquí deberías validar el JWT
-  next();
-}
-
 // Health check para keep-alive
 app.get(['/health', '/api/health'], (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString(), service: 'AGROK Backend & Telegram TMA' });
+});
+
+// Endpoint de Webhook oficial para Telegram
+app.post('/api/telegram-webhook', (req, res) => {
+  const botInstance = getBotInstance();
+  if (botInstance && req.body) {
+    try {
+      botInstance.processUpdate(req.body);
+    } catch (e) {
+      console.error('Error procesando webhook de Telegram:', e);
+    }
+  }
+  res.sendStatus(200);
 });
 
 // ==========================================
@@ -60,7 +61,6 @@ app.post('/api/auth/login', async (req, res) => {
     let user = null;
 
     if (username && password) {
-      // Sanitizar entrada
       const cleanUsername = sanitizeInput(username);
       if (!cleanUsername || cleanUsername.length < 3 || cleanUsername.length > 50) {
         return res.status(400).json({ success: false, error: 'Nombre de usuario inválido' });
@@ -114,7 +114,6 @@ app.get('/api/usuarios', async (req, res) => {
 app.post('/api/usuarios', async (req, res) => {
   const { username, password, nombre, rol, puede_crear_proyectos, puede_cerrar_incidencias, puede_registrar_medicion, puede_gestionar_materiales, tg_user_id } = req.body;
   
-  // Validaciones mejoradas
   if (!username || !password || !nombre) {
     return res.status(400).json({ success: false, error: 'Usuario, contraseña y nombre son obligatorios' });
   }
@@ -134,7 +133,6 @@ app.post('/api/usuarios', async (req, res) => {
   const cleanRol = rol && validRoles.includes(rol) ? rol : 'campo';
 
   try {
-    // Verificar si el usuario ya existe
     const existingUser = await get('SELECT id FROM usuario WHERE username = ?', [cleanUsername.toLowerCase()]);
     if (existingUser) {
       return res.status(409).json({ success: false, error: 'El usuario ya existe' });
@@ -206,7 +204,7 @@ app.put('/api/usuarios/:id', async (req, res) => {
           tg_user_id = COALESCE(?, tg_user_id)
       WHERE id = ?
     `, [
-      nombre ? nombre.trim() : null,
+      nombre ? sanitizeInput(nombre) : null,
       rol || null,
       puede_crear_proyectos !== undefined ? (puede_crear_proyectos ? 1 : 0) : null,
       puede_cerrar_incidencias !== undefined ? (puede_cerrar_incidencias ? 1 : 0) : null,
@@ -287,11 +285,11 @@ app.post('/api/proyectos', async (req, res) => {
   if (!nombre) return res.status(400).json({ success: false, error: 'Nombre requerido' });
 
   try {
-    const cleanId = id ? id.trim() : `PRJ-${Date.now().toString(36).toUpperCase()}`;
+    const cleanId = id ? sanitizeInput(id) : `PRJ-${Date.now().toString(36).toUpperCase()}`;
     await run(`
       INSERT INTO proyecto (id, nombre, tipo, ciclo, superficie_meta_ha, fase_catalogo, gerente_id, inicio, fin)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [cleanId, nombre.trim(), tipo || 'maiz', ciclo || `${tipo || 'Maíz'} 2026`, Number(superficie_meta_ha) || 0, fase_catalogo || 'V0_V2', gerente_id || 'Gerente Asignado', inicio || new Date().toISOString().split('T')[0], fin || null]);
+    `, [cleanId, sanitizeInput(nombre), tipo || 'maiz', ciclo || `${tipo || 'Maíz'} 2026`, Number(superficie_meta_ha) || 0, fase_catalogo || 'V0_V2', gerente_id || 'Gerente Asignado', inicio || new Date().toISOString().split('T')[0], fin || null]);
 
     res.json({ success: true, message: 'Proyecto creado', projectId: cleanId });
   } catch (error) {
@@ -304,11 +302,11 @@ app.post('/api/hitos', async (req, res) => {
   if (!proyecto_id || !nombre) return res.status(400).json({ success: false, error: 'Proyecto y Nombre obligatorios' });
 
   try {
-    const cleanId = id ? id.trim() : `HITO-${Date.now().toString(36).toUpperCase()}`;
+    const cleanId = id ? sanitizeInput(id) : `HITO-${Date.now().toString(36).toUpperCase()}`;
     await run(`
       INSERT INTO hito (id, proyecto_id, nombre, descripcion, orden, fecha_meta, superficie_meta_ha, estado)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `, [cleanId, proyecto_id, nombre.trim(), descripcion || '', Number(orden) || 1, fecha_meta || null, Number(superficie_meta_ha) || 0, estado || 'en_progreso']);
+    `, [cleanId, proyecto_id, sanitizeInput(nombre), descripcion ? sanitizeInput(descripcion) : '', Number(orden) || 1, fecha_meta || null, Number(superficie_meta_ha) || 0, estado || 'en_progreso']);
 
     res.json({ success: true, message: 'Hito creado', hitoId: cleanId });
   } catch (error) {
@@ -321,7 +319,7 @@ app.post('/api/tareas', async (req, res) => {
   if (!hito_id || !nombre) return res.status(400).json({ success: false, error: 'Hito y Nombre requeridos' });
 
   try {
-    const cleanId = id ? id.trim() : `TAR-${Date.now().toString(36).toUpperCase()}`;
+    const cleanId = id ? sanitizeInput(id) : `TAR-${Date.now().toString(36).toUpperCase()}`;
     let pId = proyecto_id;
     if (!pId) {
       const h = await get('SELECT proyecto_id FROM hito WHERE id = ?', [hito_id]);
@@ -331,7 +329,7 @@ app.post('/api/tareas', async (req, res) => {
     await run(`
       INSERT INTO tarea (id, hito_id, proyecto_id, predio_id, nombre, descripcion, actividad_id, unidad, cantidad_meta, cantidad_acumulada, estado, responsable, fecha_inicio, fecha_fin)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'en_progreso', ?, ?, ?)
-    `, [cleanId, hito_id, pId, predio_id || null, nombre.trim(), descripcion || '', actividad_id || 'siembra', unidad || 'ha', Number(cantidad_meta) || 0, responsable || 'Operador', fecha_inicio || new Date().toISOString().split('T')[0], fecha_fin || null]);
+    `, [cleanId, hito_id, pId, predio_id || null, sanitizeInput(nombre), descripcion ? sanitizeInput(descripcion) : '', actividad_id || 'siembra', unidad || 'ha', Number(cantidad_meta) || 0, responsable || 'Operador', fecha_inicio || new Date().toISOString().split('T')[0], fecha_fin || null]);
 
     res.json({ success: true, message: 'Tarea creada', tareaId: cleanId });
   } catch (error) {
@@ -681,12 +679,12 @@ app.post('/api/incidencias', async (req, res) => {
     await run(`
       INSERT INTO incidencia (folio, tipo, obra_id, maquina_id, estado, abierta_en, descripcion)
       VALUES (?, ?, ?, ?, 'abierta', ?, ?)
-    `, [folio, tipo, obra_id, maquina_id || null, nowIso, descripcion]);
+    `, [folio, tipo, obra_id, maquina_id || null, nowIso, sanitizeInput(descripcion)]);
 
     await run(`
       INSERT INTO incidencia_evento (folio, fecha, autor_nombre, texto, estado_resultante)
       VALUES (?, ?, ?, ?, 'abierta')
-    `, [folio, nowIso, autor_nombre || 'Supervisor', descripcion]);
+    `, [folio, nowIso, autor_nombre || 'Supervisor', sanitizeInput(descripcion)]);
 
     res.json({ success: true, folio, message: `Incidencia ${folio} creada` });
   } catch (error) {
@@ -708,13 +706,13 @@ app.post('/api/incidencias/:folio/estado', async (req, res) => {
   try {
     const nowIso = new Date().toISOString();
     if (estado === 'cerrada') {
-      await run("UPDATE incidencia SET estado = 'cerrada', cerrada_en = ?, causa_raiz = ? WHERE folio = ?", [nowIso, causa_raiz.trim(), folio]);
+      await run("UPDATE incidencia SET estado = 'cerrada', cerrada_en = ?, causa_raiz = ? WHERE folio = ?", [nowIso, sanitizeInput(causa_raiz), folio]);
     } else {
       await run('UPDATE incidencia SET estado = ? WHERE folio = ?', [estado, folio]);
     }
 
     await run("INSERT INTO incidencia_evento (folio, fecha, autor_nombre, texto, estado_resultante) VALUES (?, ?, ?, ?, ?)", [
-      folio, nowIso, autor_nombre || 'Usuario', `Cambio a ${estado}: ${causa_raiz || ''}`, estado
+      folio, nowIso, autor_nombre || 'Usuario', `Cambio a ${estado}: ${causa_raiz ? sanitizeInput(causa_raiz) : ''}`, estado
     ]);
 
     res.json({ success: true, message: `Incidencia ${folio} actualizada a ${estado}` });
@@ -789,7 +787,7 @@ app.post('/api/materiales', async (req, res) => {
     await run(`
       INSERT INTO material (obra_id, insumo, requerido, en_sitio, pedido, unidad, eta, actualizado_en, autor_nombre)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [obra_id, insumo.trim(), Number(requerido) || 0, Number(en_sitio) || 0, Number(pedido) || 0, unidad || 'pieza', eta || 'sin_fecha', new Date().toISOString(), autor_nombre || 'Supervisor']);
+    `, [obra_id, sanitizeInput(insumo), Number(requerido) || 0, Number(en_sitio) || 0, Number(pedido) || 0, unidad || 'pieza', eta || 'sin_fecha', new Date().toISOString(), autor_nombre || 'Supervisor']);
 
     res.json({ success: true, message: 'Material registrado' });
   } catch (error) {
