@@ -10,6 +10,16 @@ const { parseDailyReport } = require('./parser');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Headers para permitir Telegram Mini App en iframes de Telegram Web/Desktop y Móvil
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.setHeader('Content-Security-Policy', "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org telegram:;");
+  res.removeHeader('X-Frame-Options');
+  next();
+});
+
 app.use(cors());
 app.use(express.json());
 
@@ -18,21 +28,28 @@ app.use(express.json());
 // ==========================================
 
 app.post('/api/auth/login', async (req, res) => {
-  const { username, password } = req.body;
-  if (!username || !password) {
-    return res.status(400).json({ success: false, error: 'Usuario y contraseña requeridos' });
-  }
+  const { username, password, tg_user_id } = req.body;
 
   try {
-    const pHash = hashPassword(password);
-    const user = await get(`
-      SELECT id, username, nombre, rol, tg_user_id, tg_chat_id, puede_crear_proyectos, puede_cerrar_incidencias, puede_registrar_medicion, puede_gestionar_materiales, activo 
-      FROM usuario 
-      WHERE username = ? AND password_hash = ? AND activo = 1
-    `, [username.trim().toLowerCase(), pHash]);
+    let user = null;
+
+    if (username && password) {
+      const pHash = hashPassword(password);
+      user = await get(`
+        SELECT id, username, nombre, rol, tg_user_id, tg_chat_id, puede_crear_proyectos, puede_cerrar_incidencias, puede_registrar_medicion, puede_gestionar_materiales, activo 
+        FROM usuario 
+        WHERE username = ? AND password_hash = ? AND activo = 1
+      `, [username.trim().toLowerCase(), pHash]);
+    } else if (tg_user_id) {
+      user = await get(`
+        SELECT id, username, nombre, rol, tg_user_id, tg_chat_id, puede_crear_proyectos, puede_cerrar_incidencias, puede_registrar_medicion, puede_gestionar_materiales, activo 
+        FROM usuario 
+        WHERE tg_user_id = ? AND activo = 1
+      `, [tg_user_id.toString()]);
+    }
 
     if (!user) {
-      return res.status(401).json({ success: false, error: 'Credenciales incorrectas o usuario inactivo' });
+      return res.status(401).json({ success: false, error: 'Credenciales incorrectas o usuario no encontrado' });
     }
 
     res.json({
@@ -149,7 +166,7 @@ app.put('/api/usuarios/:id', async (req, res) => {
 });
 
 // ==========================================
-// 2. ESTRUCTURA COMPLETA: PROYECTOS -> HITOS -> TAREAS
+// 2. PROYECTOS, HITOS Y TAREAS
 // ==========================================
 
 app.get('/api/proyectos/estructura', async (req, res) => {
@@ -198,7 +215,6 @@ app.get('/api/proyectos/estructura', async (req, res) => {
   }
 });
 
-// Proyectos CRUD
 app.get('/api/proyectos', async (req, res) => {
   try {
     const proyectos = await all('SELECT * FROM proyecto ORDER BY id ASC');
@@ -225,10 +241,9 @@ app.post('/api/proyectos', async (req, res) => {
   }
 });
 
-// Hitos CRUD
 app.post('/api/hitos', async (req, res) => {
   const { id, proyecto_id, nombre, descripcion, orden, fecha_meta, superficie_meta_ha, estado } = req.body;
-  if (!proyecto_id || !nombre) return res.status(400).json({ success: false, error: 'Proyecto y Nombre son obligatorios' });
+  if (!proyecto_id || !nombre) return res.status(400).json({ success: false, error: 'Proyecto y Nombre obligatorios' });
 
   try {
     const cleanId = id ? id.trim() : `HITO-${Date.now().toString(36).toUpperCase()}`;
@@ -237,42 +252,18 @@ app.post('/api/hitos', async (req, res) => {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `, [cleanId, proyecto_id, nombre.trim(), descripcion || '', Number(orden) || 1, fecha_meta || null, Number(superficie_meta_ha) || 0, estado || 'en_progreso']);
 
-    res.json({ success: true, message: 'Hito creado con éxito', hitoId: cleanId });
+    res.json({ success: true, message: 'Hito creado', hitoId: cleanId });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-app.put('/api/hitos/:id', async (req, res) => {
-  const { id } = req.params;
-  const { nombre, descripcion, orden, fecha_meta, superficie_meta_ha, estado } = req.body;
-
-  try {
-    await run(`
-      UPDATE hito
-      SET nombre = COALESCE(?, nombre),
-          descripcion = COALESCE(?, descripcion),
-          orden = COALESCE(?, orden),
-          fecha_meta = COALESCE(?, fecha_meta),
-          superficie_meta_ha = COALESCE(?, superficie_meta_ha),
-          estado = COALESCE(?, estado)
-      WHERE id = ?
-    `, [nombre, descripcion, orden, fecha_meta, superficie_meta_ha, estado, id]);
-
-    res.json({ success: true, message: 'Hito actualizado' });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Tareas CRUD
 app.post('/api/tareas', async (req, res) => {
   const { id, hito_id, proyecto_id, predio_id, nombre, descripcion, actividad_id, unidad, cantidad_meta, responsable, fecha_inicio, fecha_fin } = req.body;
   if (!hito_id || !nombre) return res.status(400).json({ success: false, error: 'Hito y Nombre requeridos' });
 
   try {
     const cleanId = id ? id.trim() : `TAR-${Date.now().toString(36).toUpperCase()}`;
-    // Si no se pasó proyecto_id, obtenerlo del hito
     let pId = proyecto_id;
     if (!pId) {
       const h = await get('SELECT proyecto_id FROM hito WHERE id = ?', [hito_id]);
@@ -282,34 +273,9 @@ app.post('/api/tareas', async (req, res) => {
     await run(`
       INSERT INTO tarea (id, hito_id, proyecto_id, predio_id, nombre, descripcion, actividad_id, unidad, cantidad_meta, cantidad_acumulada, estado, responsable, fecha_inicio, fecha_fin)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'en_progreso', ?, ?, ?)
-    `, [cleanId, hito_id, pId, predio_id || null, nombre.trim(), descripcion || '', actividad_id || 'siembra', unidad || 'ha', Number(cantidad_meta) || 0, responsable || 'Operador Asignado', fecha_inicio || new Date().toISOString().split('T')[0], fecha_fin || null]);
+    `, [cleanId, hito_id, pId, predio_id || null, nombre.trim(), descripcion || '', actividad_id || 'siembra', unidad || 'ha', Number(cantidad_meta) || 0, responsable || 'Operador', fecha_inicio || new Date().toISOString().split('T')[0], fecha_fin || null]);
 
-    res.json({ success: true, message: 'Tarea creada con éxito', tareaId: cleanId });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-app.put('/api/tareas/:id', async (req, res) => {
-  const { id } = req.params;
-  const { nombre, descripcion, predio_id, actividad_id, unidad, cantidad_meta, cantidad_acumulada, estado, responsable } = req.body;
-
-  try {
-    await run(`
-      UPDATE tarea
-      SET nombre = COALESCE(?, nombre),
-          descripcion = COALESCE(?, descripcion),
-          predio_id = COALESCE(?, predio_id),
-          actividad_id = COALESCE(?, actividad_id),
-          unidad = COALESCE(?, unidad),
-          cantidad_meta = COALESCE(?, cantidad_meta),
-          cantidad_acumulada = COALESCE(?, cantidad_acumulada),
-          estado = COALESCE(?, estado),
-          responsable = COALESCE(?, responsable)
-      WHERE id = ?
-    `, [nombre, descripcion, predio_id, actividad_id, unidad, cantidad_meta, cantidad_acumulada, estado, responsable, id]);
-
-    res.json({ success: true, message: 'Tarea actualizada' });
+    res.json({ success: true, message: 'Tarea creada', tareaId: cleanId });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -323,7 +289,6 @@ app.get('/api/tablero/hoy', async (req, res) => {
   try {
     const today = new Date().toISOString().split('T')[0];
 
-    // Widget 1: Obras sin reporte hoy
     const obrasOperacion = await all('SELECT * FROM obra WHERE estado = "operacion"');
     const reportesHoy = await all('SELECT obra_id, es_sin_actividad, motivo_sin_actividad FROM reporte WHERE fecha_operativa = ?', [today]);
     const reportedIds = new Set(reportesHoy.map(r => r.obra_id));
@@ -341,7 +306,6 @@ app.get('/api/tablero/hoy', async (req, res) => {
     }
     sinReporte.sort((a, b) => b.dias_sin_reporte - a.dias_sin_reporte);
 
-    // Widget 2: Avance contra meta
     const obrasAvance = [];
     for (const o of obrasOperacion) {
       const predios = await all(`
@@ -389,7 +353,6 @@ app.get('/api/tablero/hoy', async (req, res) => {
       });
     }
 
-    // Widget 3: Incidencias abiertas
     const incidencias = await all(`
       SELECT i.*, o.nombre as obra_nombre 
       FROM incidencia i 
@@ -402,7 +365,6 @@ app.get('/api/tablero/hoy', async (req, res) => {
       dias_abierta: Math.max(0, Math.floor((new Date() - new Date(i.abierta_en)) / (1000 * 60 * 60 * 24)))
     }));
 
-    // Widget 4: Bloqueado por material
     const materialesFaltantes = await all(`
       SELECT m.*, o.nombre as obra_nombre 
       FROM material m 
@@ -464,29 +426,6 @@ app.get('/api/obras', async (req, res) => {
       hitos,
       tareas
     });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-app.post('/api/obras', async (req, res) => {
-  const { id, nombre, proyecto_id, entidad_id, fase_actual, estado, responsable_id, predio_ids } = req.body;
-  if (!nombre) return res.status(400).json({ success: false, error: 'Nombre de obra requerido' });
-
-  try {
-    const cleanId = id ? id.trim().toLowerCase().replace(/\s+/g, '_') : `obra_${Date.now().toString(36)}`;
-    await run(`
-      INSERT INTO obra (id, nombre, proyecto_id, entidad_id, fase_actual, estado, responsable_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `, [cleanId, nombre.trim(), proyecto_id || 'PRJ-MAIZ-2026', entidad_id || 'Agrokool', fase_actual || 'operacion', estado || 'operacion', responsable_id || 'Campo']);
-
-    if (predio_ids && Array.isArray(predio_ids)) {
-      for (const pid of predio_ids) {
-        await run('INSERT OR IGNORE INTO obra_predio (obra_id, predio_id) VALUES (?, ?)', [cleanId, pid]);
-      }
-    }
-
-    res.json({ success: true, message: 'Obra creada exitosamente', obraId: cleanId });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -590,7 +529,6 @@ app.post('/api/reports/sync', async (req, res) => {
               ha
             ]);
 
-            // Actualizar acumulado de la tarea si fue asignada
             const targetTareaId = a.tarea_id || tarea_id;
             if (targetTareaId && ha > 0) {
               await run(`
@@ -599,7 +537,6 @@ app.post('/api/reports/sync', async (req, res) => {
                 WHERE id = ?
               `, [ha, targetTareaId]);
 
-              // Revisar si se completó la meta de la tarea
               const tar = await get('SELECT cantidad_meta, cantidad_acumulada FROM tarea WHERE id = ?', [targetTareaId]);
               if (tar && tar.cantidad_meta > 0 && tar.cantidad_acumulada >= tar.cantidad_meta) {
                 await run("UPDATE tarea SET estado = 'completada' WHERE id = ?", [targetTareaId]);
