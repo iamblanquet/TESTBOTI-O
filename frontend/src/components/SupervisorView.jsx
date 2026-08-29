@@ -1,364 +1,443 @@
 import React, { useState } from 'react';
 import {
-  FolderPlus,
-  Plus,
-  Trash2,
-  CheckCircle,
-  Clock,
-  Send,
-  Bot,
+  AlertTriangle,
   Layers,
-  ArrowUpRight,
+  TrendingUp,
+  Package,
+  Tractor,
   ShieldCheck,
+  CheckCircle2,
+  Clock,
+  Check,
+  X,
   RefreshCw,
-  MessageSquare
+  Plus,
+  Compass
 } from 'lucide-react';
-import { createProjectApi } from '../services/api';
+import { updateIncidenciaEstadoApi, createIncidenciaApi } from '../services/api';
 
 export default function SupervisorView({
-  projects,
-  recentReports,
+  tableroData,
   onRefreshData,
   onOpenBotModal,
   botStatus
 }) {
-  const [code, setCode] = useState('');
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [location, setLocation] = useState('');
-  const [tasks, setTasks] = useState(['Fase 1: Preparación y montaje', 'Fase 2: Ejecución principal']);
-  const [newTaskInput, setNewTaskInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [successMsg, setSuccessMsg] = useState(null);
-  const [errorMsg, setErrorMsg] = useState(null);
+  const [closingFolio, setClosingFolio] = useState(null);
+  const [causaRaiz, setCausaRaiz] = useState('');
+  const [isSubmittingClose, setIsSubmittingClose] = useState(false);
 
-  const handleAddTask = () => {
-    if (newTaskInput.trim()) {
-      setTasks([...tasks, newTaskInput.trim()]);
-      setNewTaskInput('');
-    }
+  const [isNewIncidenciaOpen, setIsNewIncidenciaOpen] = useState(false);
+  const [newIncTipo, setNewIncTipo] = useState('falla_mecanica');
+  const [newIncObra, setNewIncObra] = useState('guayeme');
+  const [newIncDesc, setNewIncDesc] = useState('');
+
+  const widgets = tableroData?.widgets || {
+    sin_reporte: [],
+    avance_obras: [],
+    incidencias_abiertas: [],
+    bloqueado_material: []
   };
 
-  const handleRemoveTask = (index) => {
-    setTasks(tasks.filter((_, i) => i !== index));
-  };
+  const maquinaria = tableroData?.maquinaria || [];
+  const activos = tableroData?.activos || [];
 
-  const handleCreateProject = async (e) => {
+  const handleCerrarIncidencia = async (e) => {
     e.preventDefault();
-    if (!code.trim() || !name.trim()) {
-      setErrorMsg('Código y nombre son obligatorios');
+    if (!causaRaiz.trim() || causaRaiz.trim().length < 5) {
+      alert('La regla de AGROK exige especificar la Causa Raíz para cerrar una incidencia.');
       return;
     }
 
-    setLoading(true);
-    setErrorMsg(null);
-    setSuccessMsg(null);
+    setIsSubmittingClose(true);
+    try {
+      await updateIncidenciaEstadoApi(closingFolio, {
+        estado: 'cerrada',
+        causa_raiz: causaRaiz.trim(),
+        autor_nombre: 'Supervisor'
+      });
+      setClosingFolio(null);
+      setCausaRaiz('');
+      onRefreshData();
+    } catch (err) {
+      alert('Error cerrando incidencia: ' + err.message);
+    } finally {
+      setIsSubmittingClose(false);
+    }
+  };
+
+  const handleCreateIncidencia = async (e) => {
+    e.preventDefault();
+    if (!newIncDesc.trim()) return;
 
     try {
-      await createProjectApi({
-        code: code.trim().toUpperCase(),
-        name: name.trim(),
-        description: description.trim(),
-        location: location.trim(),
-        tasks
+      await createIncidenciaApi({
+        tipo: newIncTipo,
+        obra_id: newIncObra,
+        descripcion: newIncDesc.trim(),
+        autor_nombre: 'Supervisor'
       });
-
-      setSuccessMsg(`✅ Proyecto ${code.toUpperCase()} creado. Los operadores ya pueden descargarlo.`);
-      setCode('');
-      setName('');
-      setDescription('');
-      setLocation('');
-      setTasks(['Fase 1: Preparación y montaje']);
+      setIsNewIncidenciaOpen(false);
+      setNewIncDesc('');
       onRefreshData();
-      setTimeout(() => setSuccessMsg(null), 5000);
     } catch (err) {
-      setErrorMsg(err.message || 'Error al crear el proyecto');
-    } finally {
-      setLoading(false);
+      alert('Error al crear incidencia: ' + err.message);
     }
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6 pb-20">
-      {/* Header del Supervisor */}
-      <div className="bg-gradient-to-r from-amber-600 to-amber-700 rounded-3xl p-5 text-white shadow-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+    <div className="max-w-4xl mx-auto space-y-5 pb-20 text-slate-800 text-xs">
+      {/* Header */}
+      <div className="bg-gradient-to-r from-emerald-800 to-teal-900 rounded-3xl p-5 text-white shadow-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <ShieldCheck className="w-6 h-6 text-amber-200" />
-            <h2 className="text-xl font-extrabold">Panel del Supervisor</h2>
+            <Compass className="w-6 h-6 text-emerald-300" />
+            <h2 className="text-xl font-extrabold">Tablero Operativo AGROK</h2>
           </div>
-          <p className="text-xs text-amber-100">
-            Recepción de reportes en tiempo real y asignación de proyectos para campo.
+          <p className="text-xs text-emerald-200">
+            Los 4 widgets canónicos (Obras sin reporte, Avance contra meta, Incidencias y Materiales).
           </p>
         </div>
 
-        <button
-          onClick={onOpenBotModal}
-          className="bg-white text-amber-900 hover:bg-amber-50 px-4 py-2.5 rounded-2xl font-bold text-xs shadow-md transition flex items-center gap-2"
-        >
-          <Bot className="w-4 h-4 text-amber-600" />
-          {botStatus?.hasActiveBot ? `Bot Activo (@${botStatus?.botInfo?.username || 'Bot'})` : 'Conectar Telegram'}
-        </button>
-      </div>
-
-      {/* Grid: Crear Proyecto + Guía Telegram */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Formulario de Creación de Proyecto */}
-        <div className="md:col-span-2 bg-white rounded-3xl p-5 shadow-sm border border-slate-200 space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-            <h3 className="font-bold text-base text-slate-800 flex items-center gap-2">
-              <FolderPlus className="w-5 h-5 text-amber-600" />
-              Crear Nuevo Proyecto / Tarea
-            </h3>
-            <span className="text-[11px] text-slate-400">Disponible para operadores en offline</span>
-          </div>
-
-          {successMsg && (
-            <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs font-semibold">
-              {successMsg}
-            </div>
-          )}
-
-          {errorMsg && (
-            <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold">
-              ❌ {errorMsg}
-            </div>
-          )}
-
-          <form onSubmit={handleCreateProject} className="space-y-3 text-xs">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block font-bold text-slate-700 uppercase mb-1">
-                  Código Único
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ej: PRJ-004"
-                  value={code}
-                  onChange={(e) => setCode(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono font-bold"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 uppercase mb-1">
-                  Nombre del Proyecto
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ej: Mantenimiento Preventivo Subestación"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 font-medium"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block font-bold text-slate-700 uppercase mb-1">
-                  Ubicación de Campo
-                </label>
-                <input
-                  type="text"
-                  placeholder="Ej: Sector Industrial Km 14"
-                  value={location}
-                  onChange={(e) => setLocation(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 uppercase mb-1">
-                  Descripción
-                </label>
-                <input
-                  type="text"
-                  placeholder="Alcance general del trabajo..."
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
-                />
-              </div>
-            </div>
-
-            {/* Tareas asociadas */}
-            <div className="pt-2 border-t border-slate-100 space-y-2">
-              <label className="block font-bold text-slate-700 uppercase">
-                Tareas o Hitos a ejecutar:
-              </label>
-
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="Añadir tarea (ej: Revisión de transformadores)"
-                  value={newTaskInput}
-                  onChange={(e) => setNewTaskInput(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleAddTask())}
-                  className="flex-1 px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
-                />
-                <button
-                  type="button"
-                  onClick={handleAddTask}
-                  className="px-3 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold flex items-center gap-1 transition"
-                >
-                  <Plus className="w-4 h-4" /> Añadir
-                </button>
-              </div>
-
-              <div className="space-y-1.5 max-h-36 overflow-y-auto">
-                {tasks.map((task, idx) => (
-                  <div
-                    key={idx}
-                    className="p-2 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between"
-                  >
-                    <span className="font-medium text-slate-700">
-                      {idx + 1}. {task}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveTask(idx)}
-                      className="text-slate-400 hover:text-rose-500 p-1"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full py-3 bg-amber-600 hover:bg-amber-700 text-white font-extrabold rounded-2xl shadow-md transition flex items-center justify-center gap-2 mt-4"
-            >
-              {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FolderPlus className="w-4 h-4" />}
-              {loading ? 'Creando Proyecto...' : 'Crear y Publicar Proyecto'}
-            </button>
-          </form>
-        </div>
-
-        {/* Guía rápida de comandos de Telegram para el Supervisor */}
-        <div className="bg-slate-900 text-white rounded-3xl p-5 shadow-sm space-y-4 text-xs flex flex-col justify-between">
-          <div>
-            <div className="flex items-center gap-2 text-sky-400 mb-2">
-              <Bot className="w-5 h-5" />
-              <h3 className="font-bold text-sm text-white">Comandos Telegram (Supervisor)</h3>
-            </div>
-            <p className="text-slate-400 text-[11px] leading-relaxed mb-3">
-              Como supervisor, puedes gestionar y recibir alertas directamente en tu celular con la app de Telegram.
-            </p>
-
-            <div className="space-y-2 font-mono text-[11px]">
-              <div className="p-2.5 bg-slate-800/80 rounded-xl border border-slate-700">
-                <span className="text-amber-400 font-bold">/rol supervisor</span>
-                <p className="text-slate-300 font-sans text-[10px] mt-0.5">
-                  Regístrate para recibir la alerta instantánea de cada reporte de campo offline.
-                </p>
-              </div>
-
-              <div className="p-2.5 bg-slate-800/80 rounded-xl border border-slate-700">
-                <span className="text-sky-300 font-bold">/nuevo_proyecto COD | NOM | DESC</span>
-                <p className="text-slate-300 font-sans text-[10px] mt-0.5">
-                  Crea un proyecto desde Telegram sin entrar a la web.
-                </p>
-              </div>
-
-              <div className="p-2.5 bg-slate-800/80 rounded-xl border border-slate-700">
-                <span className="text-emerald-300 font-bold">/proyectos</span>
-                <p className="text-slate-300 font-sans text-[10px] mt-0.5">
-                  Ver lista consolidada con barras de porcentaje.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-[11px] text-amber-200">
-            🔔 <strong>Alerta de Reportes:</strong> El bot te avisará comparando la <strong>hora real de campo</strong> vs la <strong>hora de sincronización</strong>.
-          </div>
-        </div>
-      </div>
-
-      {/* Feed de Reportes Recibidos */}
-      <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-200 space-y-4">
-        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-          <div>
-            <h3 className="font-bold text-base text-slate-800 flex items-center gap-2">
-              <MessageSquare className="w-5 h-5 text-sky-600" />
-              Historial de Reportes de Campo Recibidos
-            </h3>
-            <p className="text-xs text-slate-400">Auditoría con timestamps offline inmutables</p>
-          </div>
+        <div className="flex items-center gap-2">
           <button
             onClick={onRefreshData}
-            className="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition"
-            title="Refrescar lista"
+            className="p-2.5 bg-white/10 hover:bg-white/20 text-white rounded-2xl transition"
+            title="Refrescar datos"
           >
             <RefreshCw className="w-4 h-4" />
           </button>
         </div>
+      </div>
 
-        {recentReports.length === 0 ? (
-          <div className="text-center py-10 text-slate-400 text-xs">
-            <Clock className="w-8 h-8 mx-auto mb-2 opacity-30" />
-            <p className="font-semibold">Aún no se han recibido reportes sincronizados</p>
-            <p className="text-[11px]">Los reportes de los operadores aparecerán aquí en vivo.</p>
+      {/* Grid de los 4 Widgets Canónicos de AGROK */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* WIDGET 1: Obras Sin Reporte Hoy */}
+        <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-200 space-y-3">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+            <h3 className="font-extrabold text-sm text-slate-900 flex items-center gap-1.5">
+              <Clock className="w-4 h-4 text-rose-500" />
+              1. Obras Sin Reporte Hoy
+            </h3>
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800">
+              {widgets.sin_reporte.length} obras
+            </span>
           </div>
-        ) : (
-          <div className="divide-y divide-slate-100">
-            {recentReports.map((r) => (
-              <div key={r.id} className="py-3.5 first:pt-0 last:pb-0 space-y-2">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className="px-2.5 py-0.5 rounded-lg bg-slate-900 text-white font-bold text-xs font-mono">
-                      {r.project_code || 'PRJ'}
-                    </span>
-                    <span className="font-bold text-xs text-slate-800">{r.project_name}</span>
-                    <span className="text-xs text-slate-500">• {r.task_name}</span>
-                  </div>
 
-                  <span className="font-extrabold text-xs px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
-                    +{r.advance_percent}% Avance
+          {widgets.sin_reporte.length === 0 ? (
+            <div className="text-center py-6 text-emerald-600 font-bold">
+              ✅ ¡Todas las obras en operación han reportado hoy!
+            </div>
+          ) : (
+            <div className="space-y-2 max-h-56 overflow-y-auto">
+              {widgets.sin_reporte.map((o) => (
+                <div key={o.id} className="p-2.5 bg-rose-50/70 border border-rose-200 rounded-2xl flex items-center justify-between">
+                  <div>
+                    <span className="font-bold text-xs text-rose-950 block">{o.nombre}</span>
+                    <span className="text-[10px] text-rose-700">Fase: {o.fase_actual} · Resp: {o.responsable_id || 'Campo'}</span>
+                  </div>
+                  <span className="font-extrabold text-[11px] px-2 py-1 bg-rose-200 text-rose-900 rounded-xl">
+                    {o.dias_sin_reporte} día(s)
                   </span>
                 </div>
+              ))}
+            </div>
+          )}
+        </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs bg-slate-50 p-2.5 rounded-xl border border-slate-200/60">
-                  <div>
-                    <span className="text-slate-400 block text-[10px] uppercase font-bold">Operador</span>
-                    <span className="font-semibold text-slate-800">{r.operator_name}</span>
+        {/* WIDGET 3: Incidencias Abiertas */}
+        <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-200 space-y-3">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+            <h3 className="font-extrabold text-sm text-slate-900 flex items-center gap-1.5">
+              <AlertTriangle className="w-4 h-4 text-amber-500" />
+              3. Incidencias Abiertas
+            </h3>
+            <button
+              onClick={() => setIsNewIncidenciaOpen(true)}
+              className="text-[10px] bg-amber-100 hover:bg-amber-200 text-amber-900 font-bold px-2 py-0.5 rounded-full flex items-center gap-1 transition"
+            >
+              <Plus className="w-3 h-3" /> Nueva
+            </button>
+          </div>
+
+          {widgets.incidencias_abiertas.length === 0 ? (
+            <div className="text-center py-6 text-emerald-600 font-bold">
+              ✅ Cero incidencias abiertas.
+            </div>
+          ) : (
+            <div className="space-y-2 max-h-56 overflow-y-auto">
+              {widgets.incidencias_abiertas.map((inc) => (
+                <div key={inc.folio} className="p-2.5 bg-amber-50/70 border border-amber-200 rounded-2xl space-y-1.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <span className="font-mono font-black text-xs text-amber-900 mr-1.5 bg-amber-200 px-1.5 py-0.2 rounded">
+                        {inc.folio}
+                      </span>
+                      <span className="font-bold text-slate-800 text-[11px]">{inc.descripcion}</span>
+                    </div>
+                    <span className="text-[10px] font-bold text-amber-800 bg-white px-2 py-0.5 rounded-md border border-amber-200 whitespace-nowrap">
+                      {inc.dias_abierta} días ({inc.estado})
+                    </span>
                   </div>
 
-                  <div>
-                    <span className="text-amber-700 block text-[10px] uppercase font-bold">
-                      ⏱️ Captura en Campo (Offline):
-                    </span>
-                    <span className="font-mono font-bold text-slate-900 text-[11px]">
-                      {r.offline_created_at}
-                    </span>
+                  <div className="flex items-center justify-between pt-1 border-t border-amber-200/60">
+                    <span className="text-[10px] text-slate-500">📁 {inc.obra_nombre}</span>
+                    <button
+                      onClick={() => setClosingFolio(inc.folio)}
+                      className="px-2 py-0.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg font-bold text-[10px] transition"
+                    >
+                      Cerrar con Causa Raíz
+                    </button>
                   </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
 
+        {/* WIDGET 2: Avance Contra Meta */}
+        <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-200 space-y-3 md:col-span-2">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+            <h3 className="font-extrabold text-sm text-slate-900 flex items-center gap-1.5">
+              <TrendingUp className="w-4 h-4 text-emerald-600" />
+              2. Avance Contra Meta (Campo vs Oficial Dron)
+            </h3>
+            <span className="text-[10px] text-slate-400">Normalizado en Hectáreas</span>
+          </div>
+
+          <div className="space-y-3">
+            {widgets.avance_obras.map((o) => (
+              <div key={o.obra_id} className="p-3 bg-slate-50 border border-slate-200 rounded-2xl space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <span className="text-emerald-700 block text-[10px] uppercase font-bold">
-                      🔄 Sincronizado en Servidor:
+                    <h4 className="font-bold text-xs text-slate-900">{o.obra_nombre}</h4>
+                    <span className="text-[10px] text-slate-500">Fase actual: {o.fase_actual}</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <span className="font-extrabold text-emerald-800 bg-emerald-100 px-2.5 py-0.5 rounded-full">
+                      🌾 Campo: {o.total_campo_ha} ha
                     </span>
-                    <span className="font-mono text-slate-700 text-[11px]">
-                      {r.synced_at}
+                    <span className="font-extrabold text-slate-700 bg-white border border-slate-200 px-2.5 py-0.5 rounded-full">
+                      🎯 Meta: {o.meta_ha} ha
                     </span>
                   </div>
                 </div>
 
-                {r.notes && (
-                  <p className="text-xs text-slate-600 italic bg-amber-50/40 p-2 rounded-lg border border-amber-100">
-                    "{r.notes}"
-                  </p>
-                )}
+                {/* Desglose por Predios */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+                  {o.predios.map((p) => (
+                    <div key={p.predio_id} className="p-2 bg-white rounded-xl border border-slate-200 text-[11px]">
+                      <span className="font-bold text-slate-800 block">📍 {p.predio_nombre}</span>
+                      <div className="mt-1 space-y-0.5 text-[10px] text-slate-600">
+                        <p>Avance Campo: <strong className="text-emerald-700">{p.campo_ha} ha</strong></p>
+                        <p>Oficial Dron: <strong>{p.oficial_ha} ha</strong></p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             ))}
           </div>
-        )}
+        </div>
+
+        {/* WIDGET 4: Bloqueado por Material */}
+        <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-200 space-y-3 md:col-span-2">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+            <h3 className="font-extrabold text-sm text-slate-900 flex items-center gap-1.5">
+              <Package className="w-4 h-4 text-purple-600" />
+              4. Bloqueado por Material
+            </h3>
+            <span className="text-[10px] text-purple-700 font-bold bg-purple-50 px-2 py-0.5 rounded-full">
+              {widgets.bloqueado_material.length} insumos pendientes
+            </span>
+          </div>
+
+          {widgets.bloqueado_material.length === 0 ? (
+            <div className="text-center py-4 text-slate-400">
+              No hay materiales bloqueantes en este momento.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {widgets.bloqueado_material.map((m) => {
+                const falta = m.requerido - m.en_sitio;
+                return (
+                  <div key={m.id} className="p-3 bg-purple-50/50 border border-purple-200 rounded-2xl space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-xs text-purple-950">{m.insumo}</span>
+                      <span className="font-extrabold text-xs text-rose-700 bg-rose-100 px-2 py-0.5 rounded-md">
+                        Faltan {falta} {m.unidad}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-slate-600">
+                      📁 {m.obra_nombre} • Req: {m.requerido} | En sitio: {m.en_sitio} | Pedido: {m.pedido}
+                    </p>
+                    <p className="text-[10px] font-mono text-purple-800 font-bold">
+                      ETA: {m.eta || 'sin_fecha'}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* WIDGET EXTRA: Maquinaria y Horómetros */}
+        <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-200 space-y-3 md:col-span-2">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+            <h3 className="font-extrabold text-sm text-slate-900 flex items-center gap-1.5">
+              <Tractor className="w-4 h-4 text-amber-600" />
+              Maquinaria & Horómetros (Umbral 300 hrs)
+            </h3>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            {maquinaria.map((maq) => {
+              const umbral = maq.umbral_servicio_hrs || 300;
+              const faltaServicio = Math.max(0, Math.round((umbral - (maq.horometro_actual % umbral)) * 10) / 10);
+              const isAlerta = faltaServicio <= 20;
+
+              return (
+                <div key={maq.id} className={`p-3 rounded-2xl border ${
+                  isAlerta ? 'bg-amber-50 border-amber-300' : 'bg-slate-50 border-slate-200'
+                }`}>
+                  <span className="font-bold text-xs block text-slate-800">{maq.nombre}</span>
+                  <p className="text-[10px] text-slate-500 mt-0.5">Operador: {maq.operador_habitual || 'General'}</p>
+                  <div className="mt-2 flex items-center justify-between text-[11px]">
+                    <span className="font-mono font-extrabold text-slate-900">{maq.horometro_actual} h</span>
+                    <span className={`font-bold px-2 py-0.5 rounded-md text-[10px] ${
+                      isAlerta ? 'bg-amber-200 text-amber-900 font-black animate-pulse' : 'bg-emerald-100 text-emerald-800'
+                    }`}>
+                      {faltaServicio} h a servicio
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </div>
+
+      {/* Modal: Cerrar Incidencia con Causa Raíz Obligatoria */}
+      {closingFolio && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+          <div className="bg-white w-full max-w-md rounded-3xl p-5 shadow-2xl border border-slate-200 space-y-3.5">
+            <h3 className="font-extrabold text-sm text-slate-900 flex items-center gap-2">
+              <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+              Cerrar Incidencia {closingFolio}
+            </h3>
+
+            <p className="text-[11px] text-slate-500">
+              📌 <strong>Regla AGROK:</strong> Ninguna incidencia pasa a <code className="bg-slate-100 px-1 rounded">cerrada</code> sin documentar la <strong>Causa Raíz</strong>.
+            </p>
+
+            <form onSubmit={handleCerrarIncidencia} className="space-y-3">
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-slate-700 mb-1">
+                  Causa Raíz de la Falla / Problema:
+                </label>
+                <textarea
+                  rows="3"
+                  required
+                  value={causaRaiz}
+                  onChange={(e) => setCausaRaiz(e.target.value)}
+                  placeholder="Ej: Manguera hidráulica desgastada por fricción con chasis. Se reemplazó por modelo reforzado con malla de acero."
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setClosingFolio(null)}
+                  className="flex-1 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-xl text-xs"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingClose}
+                  className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl text-xs shadow-md"
+                >
+                  {isSubmittingClose ? 'Cerrando...' : 'Cerrar Incidencia'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Crear Incidencia Express */}
+      {isNewIncidenciaOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+          <div className="bg-white w-full max-w-md rounded-3xl p-5 shadow-2xl border border-slate-200 space-y-3.5">
+            <h3 className="font-extrabold text-sm text-slate-900 flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-500" />
+              Nueva Incidencia Operativa
+            </h3>
+
+            <form onSubmit={handleCreateIncidencia} className="space-y-3">
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-slate-700 mb-1">Obra:</label>
+                <select
+                  value={newIncObra}
+                  onChange={(e) => setNewIncObra(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl font-bold"
+                >
+                  <option value="guayeme">Maíz Guayeme</option>
+                  <option value="sta_teresita">Desmonte Santa Teresita</option>
+                  <option value="cluster_mangos">Siembra Clúster Mangos</option>
+                  <option value="san_alberto">Maíz San Alberto</option>
+                  <option value="potrero_yeguas">Cercado Potrero Yeguas</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-slate-700 mb-1">Tipo de Incidencia:</label>
+                <select
+                  value={newIncTipo}
+                  onChange={(e) => setNewIncTipo(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl font-semibold"
+                >
+                  <option value="falla_mecanica">Falla mecánica</option>
+                  <option value="plaga">Plaga</option>
+                  <option value="clima">Clima</option>
+                  <option value="fuego">Fuego</option>
+                  <option value="conflicto_terceros">Conflicto con terceros</option>
+                  <option value="desabasto_material">Desabasto de material</option>
+                  <option value="seguridad_epp">Seguridad EPP</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-slate-700 mb-1">Descripción:</label>
+                <textarea
+                  rows="3"
+                  required
+                  value={newIncDesc}
+                  onChange={(e) => setNewIncDesc(e.target.value)}
+                  placeholder="Detalles del problema en campo..."
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl"
+                />
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsNewIncidenciaOpen(false)}
+                  className="flex-1 py-2 bg-slate-200 text-slate-700 font-bold rounded-xl text-xs"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2 bg-amber-600 hover:bg-amber-700 text-white font-extrabold rounded-xl text-xs shadow-md"
+                >
+                  Registrar Incidencia
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,10 +1,26 @@
-# 📱 Sistema de Reportes de Campo Offline-First con Bot de Telegram
+# 🌾 AGROK · Sistema de Campo (Spec v2)
 
-Sistema **100% funcional y real** diseñado para la captura de avances en campo sin necesidad de conexión a internet (Offline-First), sincronización automática al recuperar señal y despacho instantáneo de notificaciones hacia un **Bot de Telegram Real** para 3 roles clave:
+Sistema integral desarrollado e implementado a partir de la especificación técnica en `docs/`:
 
-1. **Operador (App Móvil Offline-First):** Descarga proyectos y registra avances en campo sin señal. Captura la fecha y hora exacta inmutable del momento del reporte (`offline_created_at`). Sincroniza al restablecerse la red.
-2. **Supervisor:** Recibe alertas instantáneas en Telegram con detalle comparativo (*Hora de captura en campo vs Hora de sincronización*), y puede crear proyectos y tareas directamente desde Telegram o desde la Web.
-3. **Líder:** Monitorea el progreso acumulado y consulta el estado de los proyectos en tiempo real mediante comandos interactivos de Telegram (`/proyectos`, `/avance [CODIGO]`).
+1. **📱 Cuadrilla / Campo (Telegram Mini App Offline-First):**
+   - Captura de reportes diarios de campo con soporte **100% Offline-First** (marca de tiempo inmutable).
+   - Catálogo cargado: Obras (`Guayeme`, `Desmonte Sta Teresita`, `Siembra Clúster Mangos`, `San Alberto`, etc.) y sus Predios asociados.
+   - Captura de Cuadrilla (Operador tractor, retro, bulldozer, técnicos, auxiliares).
+   - Captura de Avance en Hectáreas normalizadas por predio y actividad.
+   - Soporte para **Día Sin Actividad** (`lluvia`, `sin_material`, `sin_cuadrilla`, `sin_maquina`, `descanso`).
+   - Pestaña de **Parser Inteligente**: Permite pegar el bloque de texto diario del 11 de mayo y clasificarlo automáticamente.
+   - Registro de Horómetros y combustible para maquinaria (Puma, Bulldozer D6, Retro New Holland).
+
+2. **📋 Tablero Operativo (Los 4 Widgets Canónicos según docs/3):**
+   - 🔴 **1. Obras sin reporte hoy**: Obras activas sin reporte del día ordenadas por días hábiles.
+   - 📈 **2. Avance contra meta**: Desglose por obra y predio comparando avance de campo (ha) vs medición oficial de dron (ha) vs meta del proyecto.
+   - ⚠️ **3. Incidencias abiertas**: Control por Folio (`F-14`), días abierta y **cierre con Causa Raíz obligatoria**.
+   - 📦 **4. Bloqueado por material**: Control de insumos faltantes, en sitio y fechas ETA.
+   - 🚜 **Maquinaria y Horómetros**: Alertas de proximidad a umbral de servicio preventivo (<20 hrs).
+
+3. **🤖 Bot de Telegram & Supergrupo AGROK:**
+   - Comandos operativos: `/reporte`, `/sin_actividad`, `/incidencia`, `/cerrar`, `/verificar`, `/horometro`, `/material`, `/medicion`, `/tablero`, `/avance`, `/pendientes`, `/hoy`.
+   - Generación automática del mensaje fijado del canal `#Tablero`.
 
 ---
 

@@ -1,77 +1,99 @@
-// Almacenamiento local persistente para funcionamiento Offline-First
+// Almacenamiento local persistente para AGROK Offline-First
 
 const STORAGE_KEYS = {
-  PROJECTS: 'offline_projects_cache',
-  REPORTS_QUEUE: 'offline_reports_queue',
-  OPERATOR_NAME: 'offline_operator_name',
-  LAST_SYNC: 'offline_last_sync_time',
-  FORCE_OFFLINE_SIM: 'force_offline_simulation'
+  OBRAS: 'agrok_offline_obras_cache',
+  PREDIOS: 'agrok_offline_predios_cache',
+  REPORTS_QUEUE: 'agrok_offline_reports_queue',
+  OPERATOR_NAME: 'agrok_offline_operator_name',
+  LAST_SYNC: 'agrok_offline_last_sync_time',
+  FORCE_OFFLINE_SIM: 'agrok_force_offline_simulation'
 };
 
-// Generador de UUID único para reportes offline
 export function generateUUID() {
   return 'rep-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 9);
 }
 
-// Formatear fecha y hora local legible
 export function formatLocalTimestamp(date = new Date()) {
   const d = new Date(date);
   const pad = (n) => String(n).padStart(2, '0');
-  const year = d.getFullYear();
-  const month = pad(d.getMonth() + 1);
-  const day = pad(d.getDate());
-  const hours = pad(d.getHours());
-  const minutes = pad(d.getMinutes());
-  const seconds = pad(d.getSeconds());
-  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-// 1. GESTIÓN DE PROYECTOS LOCALES
-export function saveProjectsLocally(projects) {
+export function formatYMD(date = new Date()) {
+  const d = new Date(date);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// 1. OBRAS Y PREDIOS LOCALES
+export function saveObrasLocally(obras, predios = []) {
   try {
-    localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(projects));
+    localStorage.setItem(STORAGE_KEYS.OBRAS, JSON.stringify(obras));
+    if (predios.length > 0) {
+      localStorage.setItem(STORAGE_KEYS.PREDIOS, JSON.stringify(predios));
+    }
     return true;
   } catch (e) {
-    console.error('Error guardando proyectos locales:', e);
+    console.error('Error guardando obras locales:', e);
     return false;
   }
 }
 
-export function getLocalProjects() {
+export function getLocalObras() {
   try {
-    const data = localStorage.getItem(STORAGE_KEYS.PROJECTS);
+    const data = localStorage.getItem(STORAGE_KEYS.OBRAS);
     return data ? JSON.parse(data) : [];
   } catch (e) {
-    console.error('Error leyendo proyectos locales:', e);
     return [];
   }
 }
 
-// 2. GESTIÓN DE LA COLA OFFLINE DE REPORTES
-export function queueOfflineReport({ projectId, projectName, taskId, taskName, operatorName, advancePercent, notes }) {
+export function getLocalPredios() {
+  try {
+    const data = localStorage.getItem(STORAGE_KEYS.PREDIOS);
+    return data ? JSON.parse(data) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+// 2. COLA DE REPORTES OFFLINE AGROK
+export function queueAgrokOfflineReport({
+  obra_id,
+  obra_nombre,
+  fecha_operativa,
+  autor_nombre,
+  es_sin_actividad = false,
+  motivo_sin_actividad = null,
+  cuadrilla = [],
+  avances = [],
+  notas = '',
+  texto_original = ''
+}) {
   const currentQueue = getOfflineReportsQueue();
   const now = new Date();
   
   const newReport = {
     client_uuid: generateUUID(),
-    project_id: Number(projectId),
-    project_name: projectName || 'Proyecto',
-    task_id: taskId ? Number(taskId) : null,
-    task_name: taskName || 'General',
-    operator_name: operatorName.trim(),
-    advance_percent: Number(advancePercent),
-    notes: notes ? notes.trim() : '',
-    offline_created_at: formatLocalTimestamp(now), // Timestamp inmutable de captura en campo
+    obra_id: obra_id || 'guayeme',
+    obra_nombre: obra_nombre || 'Obra AGROK',
+    fecha_operativa: fecha_operativa || formatYMD(now),
+    autor_nombre: autor_nombre.trim(),
+    es_sin_actividad: !!es_sin_actividad,
+    motivo_sin_actividad: motivo_sin_actividad || null,
+    cuadrilla: cuadrilla || [],
+    avances: avances || [],
+    notas: notas ? notas.trim() : '',
+    texto_original: texto_original || '',
+    offline_created_at: formatLocalTimestamp(now),
     offline_created_iso: now.toISOString(),
-    status: 'PENDING_SYNC', // 'PENDING_SYNC', 'SYNCING', 'SYNCED', 'ERROR'
+    status: 'PENDING_SYNC',
     synced_at: null
   };
 
   const updatedQueue = [newReport, ...currentQueue];
   localStorage.setItem(STORAGE_KEYS.REPORTS_QUEUE, JSON.stringify(updatedQueue));
-  
-  // Guardar también el nombre del operador para futuras sesiones
-  saveOperatorName(operatorName);
+  saveOperatorName(autor_nombre);
 
   return newReport;
 }
@@ -81,7 +103,6 @@ export function getOfflineReportsQueue() {
     const data = localStorage.getItem(STORAGE_KEYS.REPORTS_QUEUE);
     return data ? JSON.parse(data) : [];
   } catch (e) {
-    console.error('Error leyendo cola de reportes:', e);
     return [];
   }
 }
@@ -89,21 +110,6 @@ export function getOfflineReportsQueue() {
 export function getPendingReports() {
   const queue = getOfflineReportsQueue();
   return queue.filter(r => r.status === 'PENDING_SYNC' || r.status === 'ERROR');
-}
-
-export function updateReportStatusInQueue(clientUuid, status, syncedAt = null) {
-  const queue = getOfflineReportsQueue();
-  const updated = queue.map(r => {
-    if (r.client_uuid === clientUuid) {
-      return {
-        ...r,
-        status,
-        synced_at: syncedAt || formatLocalTimestamp(new Date())
-      };
-    }
-    return r;
-  });
-  localStorage.setItem(STORAGE_KEYS.REPORTS_QUEUE, JSON.stringify(updated));
 }
 
 export function markAllAsSynced(syncedList) {
@@ -138,16 +144,16 @@ export function deleteReportFromQueue(clientUuid) {
   localStorage.setItem(STORAGE_KEYS.REPORTS_QUEUE, JSON.stringify(filtered));
 }
 
-// 3. PERFIL DEL OPERADOR
+// 3. PERFIL OPERADOR
 export function saveOperatorName(name) {
   if (name) localStorage.setItem(STORAGE_KEYS.OPERATOR_NAME, name.trim());
 }
 
 export function getOperatorName() {
-  return localStorage.getItem(STORAGE_KEYS.OPERATOR_NAME) || 'Operador de Campo';
+  return localStorage.getItem(STORAGE_KEYS.OPERATOR_NAME) || 'Operador AGROK';
 }
 
-// 4. MODO OFFLINE SIMULADO (Para pruebas manuales en entorno con internet)
+// 4. SIMULACIÓN OFFLINE
 export function getOfflineSimulationMode() {
   return localStorage.getItem(STORAGE_KEYS.FORCE_OFFLINE_SIM) === 'true';
 }
