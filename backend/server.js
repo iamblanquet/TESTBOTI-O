@@ -23,6 +23,11 @@ app.use((req, res, next) => {
 app.use(cors());
 app.use(express.json());
 
+// Health check para keep-alive
+app.get(['/health', '/api/health'], (req, res) => {
+  res.json({ status: 'ok', time: new Date().toISOString(), service: 'AGROK Backend & Telegram TMA' });
+});
+
 // ==========================================
 // 1. AUTENTICACIÓN & USUARIOS
 // ==========================================
@@ -783,7 +788,7 @@ const frontendDist = path.join(__dirname, '../frontend/dist');
 if (fs.existsSync(frontendDist)) {
   app.use(express.static(frontendDist));
   app.get('*', (req, res, next) => {
-    if (req.path.startsWith('/api')) return next();
+    if (req.path.startsWith('/api') || req.path.startsWith('/health')) return next();
     res.sendFile(path.join(frontendDist, 'index.html'));
   });
 }

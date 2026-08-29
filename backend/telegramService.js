@@ -21,6 +21,14 @@ function getPersistentMenuKeyboard(appUrl) {
   };
 }
 
+function getInlineWebAppButton(appUrl) {
+  return {
+    inline_keyboard: [
+      [{ text: '🌾 ABRIR MINI APP AGROK', web_app: { url: appUrl } }]
+    ]
+  };
+}
+
 async function initTelegramBot(token, expressApp = null) {
   if (!token || token.trim() === '' || token.includes('TU_TELEGRAM_BOT_TOKEN_AQUI')) {
     console.log('⚠️ [Telegram Bot AGROK] Sin token configurado.');
@@ -36,7 +44,7 @@ async function initTelegramBot(token, expressApp = null) {
     }
 
     currentToken = token.trim();
-    console.log('🤖 [Telegram Bot AGROK] Inicializando bot con menú desplegable...');
+    console.log('🤖 [Telegram Bot AGROK] Inicializando bot con Mini App oficial...');
 
     bot = new TelegramBot(currentToken, {
       polling: {
@@ -47,9 +55,9 @@ async function initTelegramBot(token, expressApp = null) {
 
     try {
       await bot.deleteWebHook();
-      console.log('🧹 [Telegram Bot AGROK] Webhook previo limpiado con éxito.');
+      console.log('🧹 [Telegram Bot AGROK] Webhook previo limpiado.');
     } catch (whErr) {
-      console.log('ℹ️ [Telegram Bot AGROK] Info webhook delete:', whErr.message);
+      console.log('ℹ️ [Telegram Bot AGROK] Info webhook:', whErr.message);
     }
 
     bot.startPolling();
@@ -57,7 +65,7 @@ async function initTelegramBot(token, expressApp = null) {
 
     bot.on('polling_error', (error) => {
       if (error.message && error.message.includes('409 Conflict')) return;
-      console.error('⚠️ [Telegram Bot AGROK] Error de polling:', error.code, error.message);
+      console.error('⚠️ [Telegram Bot AGROK] Polling error:', error.code, error.message);
     });
 
     setupBotHandlers(bot);
@@ -75,16 +83,16 @@ async function initTelegramBot(token, expressApp = null) {
               web_app: { url: appUrl }
             }
           });
-          console.log('📱 [Telegram Bot AGROK] Menú desplegable oficial configurado.');
+          console.log('📱 [Telegram Bot AGROK] Menu Button oficial configurado.');
         } catch (e) {}
       }
     }).catch(err => {
-      console.error('❌ [Telegram Bot AGROK] Error al conectar con Telegram:', err.message);
+      console.error('❌ [Telegram Bot AGROK] Error conectando a Telegram:', err.message);
     });
 
     return bot;
   } catch (error) {
-    console.error('❌ [Telegram Bot AGROK] Error crítico en initTelegramBot:', error.message);
+    console.error('❌ [Telegram Bot AGROK] Error en initTelegramBot:', error.message);
     return null;
   }
 }
@@ -92,20 +100,41 @@ async function initTelegramBot(token, expressApp = null) {
 function setupBotHandlers(botInstance) {
   const appUrl = getWebAppUrl();
 
-  // 1. /start
-  botInstance.onText(/\/start/, async (msg) => {
+  // 1. /start y /menu
+  botInstance.onText(/\/(?:start|menu)/, async (msg) => {
     const chatId = msg.chat.id.toString();
     const firstName = msg.chat.first_name || 'Colega';
 
+    try {
+      await botInstance.setChatMenuButton({
+        chat_id: msg.chat.id,
+        menu_button: {
+          type: 'web_app',
+          text: '🌾 AGROK Mini App',
+          web_app: { url: appUrl }
+        }
+      });
+    } catch (e) {}
+
     const welcomeMsg = 
       `🌾 *¡Hola, ${firstName}! Bienvenido a AGROK · Sistema de Campo.*\n\n` +
-      `📱 *La plataforma completa está integrada en tu menú de chat:*\n` +
-      `• 🛠️ *Campo:* Reportes diarios y horómetros 100% Offline-First.\n` +
-      `• 📋 *Gerencia:* Tablero de 4 widgets, Hitos, Tareas e Incidencias.\n` +
-      `• 📊 *Dirección:* Avance consolidado (Campo vs Dron vs Meta).\n\n` +
-      `👇 _Usa el menú desplegable en tu teclado o el botón de menú para abrir la aplicación:_`;
+      `📱 *La aplicación completa está disponible en tu Telegram:*\n` +
+      `• 🛠️ *Campo:* Reportes con Hitos y Tareas (100% Offline-First).\n` +
+      `• 📋 *Gerencia:* Tablero Operativo de 4 widgets en tiempo real.\n` +
+      `• 📊 *Dirección:* Avance consolidado vs Mediciones de Dron.\n\n` +
+      `👇 *Toca el botón abajo para abrir la Mini App:*`;
 
     botInstance.sendMessage(chatId, welcomeMsg, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🌾 ABRIR MINI APP AGROK', web_app: { url: appUrl } }]
+        ]
+      }
+    });
+
+    // Enviar teclado persistente de soporte
+    botInstance.sendMessage(chatId, `_Usa el menú rápido en tu teclado o el botón de menú para navegar:_`, {
       parse_mode: 'Markdown',
       reply_markup: getPersistentMenuKeyboard(appUrl)
     });
@@ -122,7 +151,7 @@ function setupBotHandlers(botInstance) {
     if (abiertas.length === 0) {
       return botInstance.sendMessage(chatId, '✅ *Cero incidencias abiertas en este momento.*', {
         parse_mode: 'Markdown',
-        reply_markup: getPersistentMenuKeyboard(appUrl)
+        reply_markup: getInlineWebAppButton(appUrl)
       });
     }
 
@@ -134,7 +163,7 @@ function setupBotHandlers(botInstance) {
 
     botInstance.sendMessage(chatId, resp, {
       parse_mode: 'Markdown',
-      reply_markup: getPersistentMenuKeyboard(appUrl)
+      reply_markup: getInlineWebAppButton(appUrl)
     });
   });
 
@@ -142,7 +171,7 @@ function setupBotHandlers(botInstance) {
     botInstance.sendMessage(
       msg.chat.id,
       `🚜 *Registro de Horómetro Rápido*\n\nUsa el formato:\n\`/horometro [MAQUINA] [INICIO] [FIN] [LITROS]\`\n\n*Ejemplo:* \`/horometro Puma 1280.5 1288.2 60\``,
-      { parse_mode: 'Markdown', reply_markup: getPersistentMenuKeyboard(appUrl) }
+      { parse_mode: 'Markdown', reply_markup: getInlineWebAppButton(appUrl) }
     );
   });
 
@@ -150,7 +179,7 @@ function setupBotHandlers(botInstance) {
     botInstance.sendMessage(
       msg.chat.id,
       `🌧️ *Registrar Día Sin Actividad*\n\nUsa el formato:\n\`/sin_actividad [MOTIVO]\`\n\n*Motivos válidos:* \`lluvia\`, \`sin_material\`, \`sin_cuadrilla\`, \`sin_maquina\`, \`descanso\``,
-      { parse_mode: 'Markdown', reply_markup: getPersistentMenuKeyboard(appUrl) }
+      { parse_mode: 'Markdown', reply_markup: getInlineWebAppButton(appUrl) }
     );
   });
 
@@ -201,7 +230,7 @@ function setupBotHandlers(botInstance) {
     botInstance.sendMessage(chatId, reply, {
       parse_mode: 'Markdown',
       message_thread_id: threadId,
-      reply_markup: getPersistentMenuKeyboard(appUrl)
+      reply_markup: getInlineWebAppButton(appUrl)
     });
   });
 
@@ -251,7 +280,7 @@ function setupBotHandlers(botInstance) {
     botInstance.sendMessage(chatId, reply, {
       parse_mode: 'Markdown',
       message_thread_id: threadId,
-      reply_markup: getPersistentMenuKeyboard(appUrl)
+      reply_markup: getInlineWebAppButton(appUrl)
     });
   });
 
@@ -277,7 +306,7 @@ function setupBotHandlers(botInstance) {
     botInstance.sendMessage(chatId, `✅ *INCIDENCIA CERRADA [${folio}]*\n🔍 *Causa Raíz:* ${causaRaiz}\n👤 *Cerrada por:* ${authorName}`, {
       parse_mode: 'Markdown',
       message_thread_id: threadId,
-      reply_markup: getPersistentMenuKeyboard(appUrl)
+      reply_markup: getInlineWebAppButton(appUrl)
     });
   });
 
@@ -326,7 +355,7 @@ function setupBotHandlers(botInstance) {
     botInstance.sendMessage(chatId, reply, {
       parse_mode: 'Markdown',
       message_thread_id: threadId,
-      reply_markup: getPersistentMenuKeyboard(appUrl)
+      reply_markup: getInlineWebAppButton(appUrl)
     });
   });
 
@@ -359,7 +388,7 @@ function setupBotHandlers(botInstance) {
       }
       return botInstance.sendMessage(chatId, resp, {
         parse_mode: 'Markdown',
-        reply_markup: getPersistentMenuKeyboard(appUrl)
+        reply_markup: getInlineWebAppButton(appUrl)
       });
     }
 
@@ -378,7 +407,7 @@ function setupBotHandlers(botInstance) {
 
     botInstance.sendMessage(chatId, reply, {
       parse_mode: 'Markdown',
-      reply_markup: getPersistentMenuKeyboard(appUrl)
+      reply_markup: getInlineWebAppButton(appUrl)
     });
   });
 
@@ -444,7 +473,7 @@ async function handleDailyReportMessage(msg, text, botInstance) {
   botInstance.sendMessage(chatId, confirmMsg, {
     parse_mode: 'Markdown',
     message_thread_id: threadId,
-    reply_markup: getPersistentMenuKeyboard(appUrl)
+    reply_markup: getInlineWebAppButton(appUrl)
   });
 }
 
@@ -467,7 +496,7 @@ async function sendTableroMessage(chatId, botInstance) {
 
   botInstance.sendMessage(chatId, msg, {
     parse_mode: 'Markdown',
-    reply_markup: getPersistentMenuKeyboard(appUrl)
+    reply_markup: getInlineWebAppButton(appUrl)
   });
 }
 
@@ -475,8 +504,8 @@ function sendHelpMessage(chatId, botInstance) {
   const appUrl = getWebAppUrl();
   botInstance.sendMessage(
     chatId,
-    `📖 *AGROK · COMANDOS RÁPIDOS*\n\n• \`/reporte\` - Enviar reporte diario\n• \`/sin_actividad [motivo]\` - Registrar lluvia/descanso\n• \`/incidencia [tipo] [desc]\` - Reportar problema\n• \`/cerrar [folio] [causa]\` - Cerrar incidencia con causa raíz\n• \`/horometro [maq] [ini] [fin] [L]\` - Registrar horas de máquina\n• \`/tablero\` - Ver resumen del día\n\n_O toca "🌾 ABRIR MINI APP AGROK" en tu menú de chat._`,
-    { parse_mode: 'Markdown', reply_markup: getPersistentMenuKeyboard(appUrl) }
+    `📖 *AGROK · COMANDOS RÁPIDOS*\n\n• \`/reporte\` - Enviar reporte diario\n• \`/sin_actividad [motivo]\` - Registrar lluvia/descanso\n• \`/incidencia [tipo] [desc]\` - Reportar problema\n• \`/cerrar [folio] [causa]\` - Cerrar incidencia con causa raíz\n• \`/horometro [maq] [ini] [fin] [L]\` - Registrar horas de máquina\n• \`/tablero\` - Ver resumen del día\n\n_O toca "🌾 ABRIR MINI APP AGROK" abajo:_`,
+    { parse_mode: 'Markdown', reply_markup: getInlineWebAppButton(appUrl) }
   );
 }
 
