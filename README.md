@@ -52,20 +52,43 @@ npm run dev -- --host
 
 ---
 
-## 🤖 Configuración del Bot de Telegram
+## 🤖 Configuración como Telegram Mini App (TMA)
 
-1. Abre **Telegram** y busca a **`@BotFather`**.
-2. Envía el comando `/newbot` y sigue las instrucciones para crear tu bot (ej: `MiReporteBot`).
-3. Copia el **Token HTTP API** que te entrega BotFather (ej: `7123456789:AAHKl9-...`).
-4. Puedes agregarlo de dos formas:
-   - **Forma Visual:** En la aplicación web/móvil, haz clic en el botón superior **"Configurar Bot"** y pega el token.
-   - **Forma Archivo:** Pégalo en el archivo `backend/.env` en la variable `TELEGRAM_BOT_TOKEN=tu_token`.
+Esta aplicación está completamente preparada para funcionar como una **Telegram Mini App Oficial (TMA)** con soporte **Offline-First**:
+
+### 1. Vincular la Mini App en @BotFather (Opcional pero Recomendado):
+1. En Telegram, abre el chat con **`@BotFather`**.
+2. Envía el comando `/newapp` o `/setmenubutton`.
+3. Selecciona tu bot.
+4. Cuando te pida la URL, ingresa tu URL de Render: `https://testboti-o.onrender.com` (o tu URL asignada).
+5. Asigna el título corto: `Reportes de Campo`.
+6. ¡Listo! Ahora todos los usuarios verán el botón **"📱 Mini App"** en la esquina inferior de Telegram.
 
 ---
 
-## 👥 Guía de Roles y Comandos del Bot
+## 👥 Guía de Uso para los 3 Roles
 
-### 1. Rol Operador (Aplicación Móvil)
+### 1. Rol Operador (Dos formas de reportar):
+- **Forma A (Telegram Mini App Offline-First):**
+  - Toca el botón **"📱 ABRIR MINI APP"** dentro de Telegram.
+  - La app reconoce automáticamente tu nombre y usuario de Telegram (@usuario).
+  - Si estás en campo **sin señal o en modo avión**, puedes llenar tus reportes con tranquilidad.
+  - Se guarda localmente con fecha y hora inmutable.
+  - Al recuperar señal, se sincroniza automáticamente.
+- **Forma B (Directo en el chat de Telegram):**
+  - Envía el comando:
+    ```text
+    /reportar PRJ-001 | 15 | Concluida excavación del tramo norte
+    ```
+
+### 2. Rol Supervisor (Alertas y Creación):
+- En Telegram, envía `/rol supervisor`.
+- Recibirás alertas instantáneas cuando cualquier operador reporte, comparando la **hora real en campo** vs la **hora de sincronización**.
+- Crea proyectos con `/nuevo_proyecto PRJ-004 | Línea Eléctrica Sur | Tendido de 33kV | Subestación`.
+
+### 3. Rol Líder (Consultas y Métricas):
+- En Telegram, envía `/rol lider`.
+- Consulta avances con `/proyectos` y `/avance [CODIGO]`.
 - Abre la app en `http://localhost:5173` (o desde tu celular usando la IP local `http://TU_IP_LOCAL:5173`).
 - Al abrir con conexión, descarga los proyectos asignados.
 - Puedes probar el funcionamiento desconectando tu WiFi o presionando el botón **"🔴 Forzado Offline"**.

@@ -32,16 +32,28 @@ export default function OperatorView({
   pendingCount,
   onReportSaved,
   onManualSync,
-  isSyncing
+  isSyncing,
+  tgUser
 }) {
   // Form State
-  const [operatorName, setOperatorName] = useState(getOperatorName());
+  const defaultName = tgUser
+    ? [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' ') || tgUser.username
+    : getOperatorName();
+
+  const [operatorName, setOperatorName] = useState(defaultName);
   const [selectedProjectId, setSelectedProjectId] = useState('');
   const [selectedTaskId, setSelectedTaskId] = useState('');
   const [advancePercent, setAdvancePercent] = useState(10);
   const [notes, setNotes] = useState('');
   const [currentLiveTime, setCurrentLiveTime] = useState(formatLocalTimestamp());
   const [notification, setNotification] = useState(null);
+
+  useEffect(() => {
+    if (tgUser) {
+      const name = [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' ') || tgUser.username;
+      if (name) setOperatorName(name);
+    }
+  }, [tgUser]);
 
   // Live timer for exact field clock
   useEffect(() => {
@@ -224,10 +236,17 @@ export default function OperatorView({
 
         {/* Campo: Operador */}
         <div className="space-y-1">
-          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-            <User className="w-3.5 h-3.5 text-slate-500" />
-            Nombre del Operador
-          </label>
+          <div className="flex items-center justify-between">
+            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+              <User className="w-3.5 h-3.5 text-slate-500" />
+              Nombre del Operador
+            </label>
+            {tgUser && (
+              <span className="text-[10px] bg-sky-100 text-sky-800 font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
+                <CheckCircle2 className="w-3 h-3 text-sky-600" /> Telegram: @{tgUser.username || tgUser.first_name}
+              </span>
+            )}
+          </div>
           <input
             type="text"
             required
