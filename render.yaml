@@ -6,9 +6,7 @@ services:
     buildCommand: npm run render-build
     startCommand: npm run render-start
     envVars:
-      - key: NODE_ENV
-        value: production
       - key: TELEGRAM_BOT_TOKEN
-        sync: false # Configurar en el dashboard de Render con tu token de BotFather
+        sync: false
       - key: PORT
         value: 10000

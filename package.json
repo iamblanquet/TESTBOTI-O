@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Sistema Offline-First para Reportes de Campo con Bot de Telegram",
   "scripts": {
-    "render-build": "npm install --prefix frontend && npm run build --prefix frontend && npm install --prefix backend",
+    "render-build": "npm install --prefix frontend --include=dev && npm run build --prefix frontend && npm install --prefix backend",
     "render-start": "npm start --prefix backend",
     "start": "npm start --prefix backend",
     "backend": "npm start --prefix backend",
